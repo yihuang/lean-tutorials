@@ -1,0 +1,20 @@
+# Cloudflare Pages response headers.
+#
+# The Lean runtime is a pthread WebAssembly build with SHARED memory, which
+# needs SharedArrayBuffer — only available in a cross-origin-isolated document.
+# Both headers must be on the top-level document and on the worker script.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+
+# The worker and our own modules are tiny; keep them fresh so a redeploy is
+# picked up immediately.
+/lean-worker.worker.js
+  Cache-Control: public, max-age=300
+/src/*
+  Cache-Control: public, max-age=300
+
+# Runtime bytes are immutable per Lean build and brotli-compressed by the
+# Function; the browser cache is what makes the second visit instant.
+/lean-wasm/*
+  Cache-Control: public, max-age=86400

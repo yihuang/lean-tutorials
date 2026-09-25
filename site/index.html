@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Lean tutorials — proofs checked in your browser</title>
+<meta name="description" content="Short, interactive Lean 4 tutorials. The real Lean kernel runs locally in WebAssembly, so your proofs are checked on your own device — no server, no account." />
+<meta name="color-scheme" content="light dark" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.92em' font-size='88'>λ</text></svg>" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="#/" aria-label="Lean tutorials home">
+    <span class="brand-mark">λ</span>
+    <span class="brand-text">Lean&nbsp;tutorials</span>
+  </a>
+  <button id="engine-chip" class="chip" type="button" aria-live="polite" aria-describedby="engine-help">
+    <span class="dot" data-state="booting"></span><span id="engine-label">Starting Lean…</span>
+  </button>
+</header>
+
+<main id="main" tabindex="-1"></main>
+
+<footer class="footer">
+  <p>
+    Proofs are checked by the real Lean kernel compiled to WebAssembly, running on your device.
+    Runtime and packed Lean library come from
+    <a href="https://lean.cau.li" rel="noopener">lean.cau.li</a>
+    (<a href="https://github.com/cauli/lean4-wasm-in-browser" rel="noopener">cauli/lean4-wasm-in-browser</a>, Apache-2.0).
+    Nothing you type is sent anywhere.
+  </p>
+  <p id="engine-help" class="muted small">
+    First visit downloads about 47&nbsp;MB of runtime (brotli-compressed). After that it is cached and starts instantly.
+  </p>
+</footer>
+
+<noscript>
+  <p class="notice">These tutorials need JavaScript: the Lean compiler runs in your browser as WebAssembly.</p>
+</noscript>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
