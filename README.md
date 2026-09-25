@@ -1,5 +1,7 @@
 # Lean tutorials
 
+**Live: <https://lean-tutorials.pages.dev>** — Cloudflare Pages project `lean-tutorials`.
+
 Short, interactive Lean 4 tutorials where **the real Lean kernel checks your proof
 on your own device**. No proof server, no account, nothing you type is sent
 anywhere: Lean 4 is compiled to WebAssembly and runs in a Web Worker in the
@@ -38,7 +40,13 @@ tests/                       unit tests + headless-Chromium proof of life
 npm run dev          # http://localhost:8788  (add ?mem=768 on low-memory machines)
 npm test             # pure-function tests, no browser needed
 npm run test:e2e     # boots the real runtime in headless Chromium and checks every lesson
+npm run test:layout  # mobile geometry: no overflow, tap targets, sticky actions
+npm run test:a11y    # WCAG contrast for every text style, light and dark
 ```
+
+Every browser test accepts `--url <origin>` to run against a deployed origin
+instead of localhost, e.g.
+`node tests/browser-check.mjs --url https://lean-tutorials.pages.dev`.
 
 The first page load downloads the runtime (about **47 MB brotli-compressed**:
 ~40 KB of JS glue, ~16 MB wasm, ~31 MB of packed Lean core) and imports the Init
@@ -88,27 +96,41 @@ The site is static (`dist/`) plus one Pages Function. `_headers` must ship, or
 `SharedArrayBuffer` is unavailable and Lean cannot start.
 
 ```bash
-npx wrangler@4 login                       # once per machine
-npm run build
-npx wrangler@4 pages deploy dist --project-name lean-tutorials
+export CLOUDFLARE_API_TOKEN=…       # a token with Pages:Edit, or `npx wrangler@4 login`
+export CLOUDFLARE_ACCOUNT_ID=…
+npx wrangler@4 pages project create lean-tutorials --production-branch main   # once
+npm run deploy
 ```
 
-`npm run deploy` does both steps. Project settings:
+`npm run deploy` builds `dist/` and uploads the assets, `_headers` and the
+Functions bundle to the production branch. Project settings:
 
 - **Build output directory**: `dist`
 - **Functions directory**: `functions` (repo root, picked up automatically)
 - No environment variables, no bindings, no database.
 
-To preview from an ephemeral public URL without an account (useful for a phone
-test), serve locally and tunnel it:
+For CI later, point a Pages Git integration at this repo: build command
+`npm run build`, output directory `dist`.
+
+Run the browser checks against the deployed origin rather than localhost:
 
 ```bash
-npm run build && npm run preview      # terminal 1
-npm run tunnel                        # terminal 2 → https://<random>.trycloudflare.com
+npm run test:e2e    -- --url https://lean-tutorials.pages.dev
+npm run test:layout -- --url https://lean-tutorials.pages.dev
+npm run test:a11y   -- --url https://lean-tutorials.pages.dev
+```
+
+To get an ephemeral public URL without any account (handy for a phone test),
+serve locally and tunnel it:
+
+```bash
+npm run preview      # terminal 1
+npm run tunnel       # terminal 2 → https://<random>.trycloudflare.com
 ```
 
 Cloudflare terminates TLS and compresses the proxied runtime, so the numbers you
-see are the production ones.
+see are the production ones. Quick tunnels are short-lived: they drop after a
+while and then need a restart.
 
 ## Updating the Lean runtime
 

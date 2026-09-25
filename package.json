@@ -8,11 +8,12 @@
     "dev": "node scripts/serve.mjs --dir site --port 8788",
     "build": "node scripts/build.mjs",
     "preview": "node scripts/build.mjs && node scripts/serve.mjs --dir dist --port 8788",
-    "deploy": "node scripts/build.mjs && npx wrangler@4 pages deploy dist --project-name lean-tutorials",
-    "tunnel": "npx --yes cloudflared tunnel --url http://localhost:8788",
+    "deploy": "node scripts/build.mjs && npx wrangler@4 pages deploy dist --project-name lean-tutorials --branch main --commit-dirty=true",
+    "tunnel": "npx --yes cloudflared tunnel --no-autoupdate --protocol http2 --url http://localhost:8788",
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "node tests/browser-check.mjs",
-    "test:layout": "node tests/layout.mjs",
+    "test:layout": "npm run build && node tests/layout.mjs",
+    "test:a11y": "npm run build && node tests/a11y-contrast.mjs",
     "test:shots": "npm run build && node tests/screenshots.mjs"
   },
   "dependencies": {
