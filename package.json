@@ -17,7 +17,7 @@
     "test:cache": "npm run build && node tests/cache-check.mjs",
     "test:shots": "npm run build && node tests/screenshots.mjs"
   },
-  "dependencies": {
+  "devDependencies": {
     "playwright-core": "^1.63.0"
   }
 }
