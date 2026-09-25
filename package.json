@@ -14,6 +14,7 @@
     "test:e2e": "node tests/browser-check.mjs",
     "test:layout": "npm run build && node tests/layout.mjs",
     "test:a11y": "npm run build && node tests/a11y-contrast.mjs",
+    "test:cache": "npm run build && node tests/cache-check.mjs",
     "test:shots": "npm run build && node tests/screenshots.mjs"
   },
   "dependencies": {

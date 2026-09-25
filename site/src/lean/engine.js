@@ -41,6 +41,9 @@ export class LeanEngine {
     this.listeners = new Set();
     /** @type {Map<string, ArrayBuffer>} */
     this.loadedPaths = new Map();
+    // What this visit cost over the network: the packed core is fetched from the
+    // page, so resource timing tells us cache hit vs download exactly.
+    this.networkBytes = { downloaded: 0, cached: 0 };
     this.booted = false;
     this._booting = null;
     this._queue = Promise.resolve();
@@ -94,7 +97,8 @@ export class LeanEngine {
     }
     // Pack downloads are the long pole; start them immediately and let them
     // overlap with the ~25 MB (`lean.js` + `lean.wasm`) runtime download.
-    const packs = corePackStream(({ index, count, received, total }) => {
+    const packs = corePackStream(({ index, count, received, total, downloadedBytes, cachedBytes }) => {
+      this.networkBytes = { downloaded: downloadedBytes, cached: cachedBytes };
       if (this.state === 'staging' || this.state === 'booting') {
         this._setProgress(
           `Downloading the Lean core library (${Math.round(received / 1048576)}/${Math.round(total / 1048576)} MB)`,
@@ -118,7 +122,9 @@ export class LeanEngine {
       throw new Error(warm.error || 'the Lean runtime rejected the warm-up compile');
     }
     this._setState('ready', 'Lean ready');
-    this._setProgress('Lean ready', 100);
+    this._setProgress('Lean ready', 100, this.networkBytes.downloaded === 0
+      ? 'The Lean core came from the browser cache this visit — no download.'
+      : `${(this.networkBytes.downloaded / 1048576).toFixed(1)} MB of Lean core downloaded (cached for next time).`);
     return true;
   }
 

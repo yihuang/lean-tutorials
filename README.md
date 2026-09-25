@@ -48,6 +48,37 @@ Every browser test accepts `--url <origin>` to run against a deployed origin
 instead of localhost, e.g.
 `node tests/browser-check.mjs --url https://lean-tutorials.pages.dev`.
 
+All browser tests share one persistent Chromium profile
+(`tests/.artifacts/chrome-profile`), so the runtime is downloaded once ever and
+subsequent runs boot from the cache. Pass `--fresh` to wipe it (that is the only
+time a test pays for the 47 MB again).
+
+## What a repeat visit costs
+
+`npm run test:cache` boots the page three times in the shared profile and reports
+the bytes that actually crossed the wire (`transferSize`, plus the server's own
+byte log when the test is also the server):
+
+| | cold visit | every visit after |
+|---|---|---|
+| `lean.js` (glue) | 42 KB | 0 B |
+| `lean.wasm` | 16.1 MB | 0 B |
+| `core-layer.json` | 31 KB | 0 B |
+| packed Lean core (5 packs) | 30.7 MB | 0 B |
+| **total** | **~47 MB** | **0 B** |
+| Lean start | ~25 s cold on a 2-vCPU box | ~17 s warm |
+
+The browser's HTTP cache holds all of it, including the 100 MB wasm: the runtime
+URLs are immutable and versioned (`?v=<release>`), the packs and manifest carry
+`max-age=86400`, and the page never uses `cache: 'no-cache'` on them. A warm
+start on this 2-vCPU container splits as ~14 s wasm compile/instantiate, ~1.7 s
+inflating and staging the core library, ~1.5 s Init import — the compile is what
+dominates here, and it is much faster on ordinary hardware.
+
+The engine status panel (tap the chip in the header) reports the same thing from
+the app's point of view: "This visit: 0 MB downloaded, 30.7 MB of Lean core
+served from the browser cache."
+
 The first page load downloads the runtime (about **47 MB brotli-compressed**:
 ~40 KB of JS glue, ~16 MB wasm, ~31 MB of packed Lean core) and imports the Init
 environment (~1 s once staged). Everything after that is cached by the browser,
@@ -191,6 +222,9 @@ messages use the learner's (not the generated file's) numbering.
   desktops and steps down (1 GB/768 MB/512 MB) on phones, and `?mem=<MB>`
   overrides it for testing. A tab needs roughly 300–500 MB of real memory to hold
   the wasm plus the packed Init library.
+- **Re-downloads.** There are none after the first visit (see above). If a
+  browser evicts the 100 MB wasm under storage pressure, it is fetched once more
+  and cached again — the app reports what it downloaded in the status panel.
 - **iOS** needs a recent Safari; the upstream project ships a separate "slim"
   build for phones, which this site does not use yet.
 - **`?mem=`**, `window.leanTutorials` (engine + checker + lessons) and

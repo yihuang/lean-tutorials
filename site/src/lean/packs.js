@@ -26,14 +26,34 @@ export function coreLayerBytes(manifest) {
 }
 
 /**
+ * How many bytes actually crossed the wire for a URL, vs how many the browser
+ * had already stored. `transferSize` is 0 for a (memory or disk) cache hit and
+ * the compressed size otherwise, which is exactly "did we re-download Lean?".
+ * Resource timing can lag the promise by a tick, hence the retry.
+ */
+async function transferredBytes(url) {
+  // Resource timing entries are keyed by absolute URL.
+  const absolute = new URL(url, location.href).href;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const entry = performance.getEntriesByName(absolute, 'resource')[0];
+    if (entry) return { transfer: entry.transferSize, decoded: entry.decodedBodySize };
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  return null;
+}
+
+/**
  * Yield the core layer one pack at a time, already split back into files.
  * Sequential on purpose: peak memory stays at one pack (~16 MB in, ~16 MB out)
  * instead of the whole 76 MB closure.
  *
- * @param {(progress: {file: string, index: number, count: number, received: number, total: number}) => void} [onProgress]
+ * @param {(progress: {file: string, index: number, count: number, received: number, total: number, downloadedBytes: number, cachedBytes: number}) => void} [onProgress]
  */
 export async function* corePackStream(onProgress) {
-  const response = await fetch(MANIFEST_URL, { cache: 'no-cache' });
+  // Default cache mode on purpose: the manifest is pinned to the same runtime
+  // release as the binary, is served with `max-age=86400`, and `no-cache` here
+  // meant re-downloading 313 KB on every single visit.
+  const response = await fetch(MANIFEST_URL);
   if (!response.ok) {
     throw new Error(`Lean core layer manifest unavailable (${response.status} ${MANIFEST_URL})`);
   }
@@ -43,12 +63,17 @@ export async function* corePackStream(onProgress) {
 
   const total = coreLayerBytes(manifest);
   let received = 0;
+  let downloadedBytes = 0;
+  let cachedBytes = 0;
 
   for (const [index, pack] of packs.entries()) {
-    const packResponse = await fetch(`${PACK_ROOT}/${pack.file}`);
+    const url = `${PACK_ROOT}/${pack.file}`;
+    const packResponse = await fetch(url);
     if (!packResponse.ok) throw new Error(`Lean core pack ${pack.file} unavailable (${packResponse.status})`);
     const compressed = await packResponse.arrayBuffer();
-    const blob = await inflateGzip(compressed);
+    const measured = await transferredBytes(url);
+    if (measured && measured.transfer === 0) cachedBytes += compressed.byteLength;
+    else downloadedBytes += measured?.transfer ?? compressed.byteLength;    const blob = await inflateGzip(compressed);
     if (blob.byteLength !== pack.bytes) {
       throw new Error(`Lean core pack ${pack.file} inflated to ${blob.byteLength} bytes, expected ${pack.bytes}`);
     }
@@ -66,7 +91,7 @@ export async function* corePackStream(onProgress) {
     }
 
     received += pack.compressedBytes || compressed.byteLength || 0;
-    onProgress?.({ file: pack.file, index, count: packs.length, received, total });
+    onProgress?.({ file: pack.file, index, count: packs.length, received, total, downloadedBytes, cachedBytes });
     yield { file: pack.file, files };
   }
 }

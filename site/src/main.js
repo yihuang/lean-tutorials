@@ -86,9 +86,16 @@ function renderStatusPanel() {
     statusPanel.append(h('p', { class: 'banner err', text: engine.error?.message ?? 'Unknown error.' }));
   }
   if (p.detail) statusPanel.append(h('p', { class: 'small muted', text: p.detail }));
+  if (engine.state === 'ready') {
+    const { downloaded, cached } = engine.networkBytes;
+    const mb = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
+    statusPanel.append(h('p', { class: 'small muted', text: downloaded === 0
+      ? `This visit: 0 MB downloaded, ${mb(cached)} of Lean core served from the browser cache.`
+      : `This visit: ${mb(downloaded)} downloaded, ${mb(cached)} from cache. The next visit downloads nothing.` }));
+  }
   statusPanel.append(h('p', { class: 'small muted', text:
-    'First visit downloads the runtime (~47 MB compressed) and the Lean core library; both are cached, ' +
-    'so a reload and every later proof check are fast. Nothing you type leaves the device.' }));
+    'First visit downloads the runtime (~47 MB compressed) and the Lean core library; both are cached by the browser, ' +
+    'so reloads and later visits transfer nothing but a few KB of revalidation. Nothing you type leaves the device.' }));
 }
 
 chip.addEventListener('click', () => {

@@ -18,6 +18,7 @@ const argValue = (name, fallback) => {
 };
 const root = resolve(argValue('dir', 'site'));
 const port = Number(argValue('port', process.env.PORT || 8788));
+const logBytes = args.includes('--log-bytes');
 const upstream = 'https://lean.cau.li';
 
 const TYPES = {
@@ -66,8 +67,13 @@ async function proxyRuntime(pathname, search, method, res) {
   }));
   res.writeHead(200, Object.fromEntries(headers));
   if (method === 'HEAD') { res.end(); return; }
-  for await (const chunk of upstreamRes.body) res.write(chunk);
+  let sent = 0;
+  for await (const chunk of upstreamRes.body) { res.write(chunk); sent += chunk.length; }
   res.end();
+  // Ground truth for "is the browser re-downloading the runtime?": worker and
+  // sub-worker fetches never show up in page-level CDP/timing, but they always
+  // hit this server.
+  if (logBytes) console.log(`[bytes] ${method} ${key} ${sent}`);
 }
 
 const server = createServer(async (req, res) => {

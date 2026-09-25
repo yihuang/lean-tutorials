@@ -7,11 +7,10 @@
 // overflow, tap-target sizes, the 16px focus-zoom threshold, and that the
 // actions row is where a thumb can reach it.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { launchProfile } from './browser-profile.mjs';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -21,15 +20,11 @@ const argValue = (name, fallback) => {
 const port = Number(argValue('port', 8795));
 const externalUrl = argValue('url', '');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const cache = join(homedir(), '.cache', 'ms-playwright');
-const chrome = readdirSync(cache).filter((n) => n.startsWith('chromium-')).sort().reverse()
-  .map((entry) => join(cache, entry, 'chrome-linux64/chrome')).find(existsSync);
 
 const server = externalUrl ? null : spawn(process.execPath, ['scripts/serve.mjs', '--dir', 'dist', '--port', String(port)], { cwd: root, stdio: 'ignore' });
 process.on('exit', () => server?.kill('SIGTERM'));
 await new Promise((r) => setTimeout(r, 800));
 
-const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
 const base = externalUrl || `http://localhost:${port}`;
 
 const failures = [];
@@ -38,8 +33,10 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures.push(label);
 };
 
-const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-const page = await phone.newPage();
+// The shared persistent profile: this test does not need Lean, but the page
+// starts it in the background, so a cold profile would still download 47 MB.
+const context = await launchProfile(chromium, { viewport: { width: 390, height: 844 } });
+const page = context.pages()[0] ?? await context.newPage();
 await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
 
 const overflow = async (label) => {
@@ -102,21 +99,20 @@ await page.waitForSelector('textarea.editor');
 await overflow('sandbox');
 
 // Desktop should keep the actions inline rather than sticky.
-const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-const wide = await desktop.newPage();
-await wide.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
-await wide.waitForSelector('textarea.editor');
-const desktopPosition = await wide.evaluate(() => getComputedStyle(document.querySelector('.actions')).position);
+await page.setViewportSize({ width: 1280, height: 900 });
+await page.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('textarea.editor');
+const desktopPosition = await page.evaluate(() => getComputedStyle(document.querySelector('.actions')).position);
 check(desktopPosition === 'static', 'desktop: actions stay inline', desktopPosition);
 
 // Dark mode renders and keeps contrast (spot check on the body background).
-const dark = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'dark' });
-const darkPage = await dark.newPage();
-await darkPage.goto(`${base}/#/lesson/rfl`, { waitUntil: 'domcontentloaded' });
-const darkBg = await darkPage.evaluate(() => getComputedStyle(document.body).backgroundColor);
+await page.emulateMedia({ colorScheme: 'dark' });
+await page.goto(`${base}/#/lesson/rfl`, { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('textarea.editor');
+const darkBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 check(darkBg !== 'rgb(251, 250, 247)', 'dark mode: background switches', darkBg);
 
-await browser.close();
+await context.close();
 server?.kill('SIGTERM');
 console.log(failures.length === 0 ? '\nLayout checks passed.' : `\n${failures.length} layout check(s) failed.`);
 process.exit(failures.length === 0 ? 0 : 1);

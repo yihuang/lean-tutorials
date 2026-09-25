@@ -8,11 +8,10 @@
 // few minutes and at least ~1.5 GB of free RAM.
 
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { CHROME, launchProfile, resetProfile, waitForEngine } from './browser-profile.mjs';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -23,27 +22,9 @@ const port = Number(argValue('port', 8799));
 const mem = argValue('mem', '768');
 const externalUrl = argValue('url', '');
 const headed = args.includes('--headed');
+if (args.includes('--fresh')) resetProfile();
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-function findChrome() {
-  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-  const cache = join(homedir(), '.cache', 'ms-playwright');
-  if (!existsSync(cache)) return null;
-  for (const entry of readdirSync(cache).filter((name) => name.startsWith('chromium-')).sort().reverse()) {
-    for (const sub of ['chrome-linux64/chrome', 'chrome-linux/chrome', 'chrome-mac/Chromium.app/Contents/MacOS/Chromium']) {
-      const candidate = join(cache, entry, sub);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
-}
-
-const chrome = findChrome();
-if (!chrome) {
-  console.error('No Chromium found. Set CHROME_PATH, or run: npx playwright install chromium');
-  process.exit(2);
-}
 
 const server = externalUrl ? null : spawn(process.execPath, ['scripts/serve.mjs', '--dir', 'site', '--port', String(port)], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
@@ -62,12 +43,11 @@ const results = [];
 
 try {
   await wait(700);
-  const browser = await chromium.launch({
-    executablePath: chrome,
+  const context = await launchProfile(chromium, {
     headless: !headed,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
+    viewport: { width: 900, height: 900 },
   });
-  const page = await browser.newPage();
+  const page = context.pages()[0] ?? await context.newPage();
   const logs = [];
   page.on('console', (message) => logs.push(`${message.type()}: ${message.text()}`));
   page.on('pageerror', (error) => logs.push(`pageerror: ${error.message}`));
@@ -76,25 +56,15 @@ try {
   const base = externalUrl || `http://localhost:${port}`;
   await page.goto(`${base}/?mem=${mem}`, { waitUntil: 'domcontentloaded' });
 
-  await page.waitForFunction(
-    () => window.leanTutorials && ['ready', 'error'].includes(window.leanTutorials.engine.state),
-    null,
-    { timeout: 15 * 60 * 1000 },
-  );
-
-  const state = await page.evaluate(() => ({
-    state: window.leanTutorials.engine.state,
-    message: window.leanTutorials.engine.progress.message,
-    error: window.leanTutorials.engine.error?.message ?? null,
-  }));
+  const state = await waitForEngine(page);
   if (state.state !== 'ready') {
     failures += 1;
     console.error(`✗ engine ${state.state}: ${state.error || state.message}`);
     console.error(logs.slice(-40).join('\n'));
-    await browser.close();
+    await context.close();
     process.exit(1);
   }
-  console.log(`✓ Lean ready in ${((Date.now() - bootStart) / 1000).toFixed(1)}s (mem=${mem}MB, chrome=${chrome})`);
+  console.log(`✓ Lean ready in ${((Date.now() - bootStart) / 1000).toFixed(1)}s (mem=${mem}MB, chrome=${CHROME}) — ${state.detail ?? state.message}`);
 
   const matrix = await page.evaluate(async () => {
     const { LESSONS, checkLesson, engine } = window.leanTutorials;
@@ -215,7 +185,7 @@ try {
   if (!uiOk) failures += 1;
   console.log(`${uiOk ? '✓' : '✗'} UI check: ${banner.trim().split('\n')[0]}`);
 
-  await browser.close();
+  await context.close();
 } catch (error) {
   failures += 1;
   console.error(`✗ ${error.stack || error}`);

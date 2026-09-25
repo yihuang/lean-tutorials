@@ -3,11 +3,10 @@
 //
 //   node tests/a11y-contrast.mjs [--url https://lean-tutorials.pages.dev]
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { launchProfile } from './browser-profile.mjs';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -17,15 +16,14 @@ const argValue = (name, fallback) => {
 const port = Number(argValue('port', 8794));
 const externalUrl = argValue('url', '');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const cache = join(homedir(), '.cache', 'ms-playwright');
-const chrome = readdirSync(cache).filter((n) => n.startsWith('chromium-')).sort().reverse()
-  .map((entry) => join(cache, entry, 'chrome-linux64/chrome')).find(existsSync);
 
 const server = externalUrl ? null : spawn(process.execPath, ['scripts/serve.mjs', '--dir', 'dist', '--port', String(port)], { cwd: root, stdio: 'ignore' });
 process.on('exit', () => server?.kill('SIGTERM'));
 await new Promise((r) => setTimeout(r, 800));
 
-const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+// Shared persistent profile, so the background Lean start is not re-downloaded.
+const context = await launchProfile(chromium, { viewport: { width: 390, height: 844 } });
+const page = context.pages()[0] ?? await context.newPage();
 const base = externalUrl || `http://localhost:${port}`;
 const failures = [];
 
@@ -92,10 +90,7 @@ const CONTRAST = `
 `;
 
 async function audit(label, colorScheme) {
-  const context = await browser.newContext({
-    viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme,
-  });
-  const page = await context.newPage();
+  await page.emulateMedia({ colorScheme });
   await page.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('textarea.editor');
   const rows = await page.evaluate(CONTRAST);
@@ -108,15 +103,12 @@ async function audit(label, colorScheme) {
     if (!ok) failures.push(`${label}/${row.selector} contrast ${row.ratio}`);
     console.log(`${ok ? '✓' : '✗'} ${row.selector.padEnd(18)} ${String(row.ratio).padStart(6)}:1  ${row.fontSize}px${row.bold ? ' bold' : ''}  (min ${minimum})`);
   }
-  return context;
 }
 
-const lightContext = await audit('lesson', 'light');
-await lightContext.close();
-const darkContext = await audit('lesson', 'dark');
+await audit('lesson', 'light');
+await audit('lesson', 'dark');
 
 // Reading order: what a screen reader (and, roughly, an eye) encounters.
-const page = await darkContext.newPage();
 await page.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('textarea.editor');
 const snapshot = await page.locator('body').ariaSnapshot();
@@ -135,8 +127,7 @@ const hitOk = String(overlap.hit).includes('btn');
 if (!hitOk || !overlap.withinViewport) failures.push('sticky actions not clickable');
 console.log(`\n${hitOk ? '✓' : '✗'} sticky Check button is the topmost element at its centre (hit ${overlap.hit}, top ${overlap.top}px)`);
 
-await darkContext.close();
-await browser.close();
+await context.close();
 server?.kill('SIGTERM');
 console.log(failures.length === 0 ? '\nContrast and reading-order checks passed.' : `\n${failures.length} issue(s): ${failures.join('; ')}`);
 process.exit(failures.length === 0 ? 0 : 1);
