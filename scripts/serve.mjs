@@ -1,15 +1,23 @@
-// Local preview server: static files + cross-origin isolation + the same
-// /lean-wasm/* proxy the Pages Function performs.
+// Local dev/preview server: static files, cross-origin isolation, and the
+// self-hosted Lean runtime.
 //
-//   node scripts/serve.mjs [--dir site] [--port 8788]
+//   node scripts/serve.mjs [--dir site|dist] [--port 8788] [--log-bytes]
 //
-// Used for `npm run dev` and for the public preview tunnel
-// (`npx cloudflared tunnel --url http://localhost:8788`), so the bytes a phone
-// downloads are the same shape as production (Cloudflare compresses the proxied
-// responses at the edge).
+// Mirrors what Cloudflare Pages does in production: the runtime is served from
+// our own origin (same-origin is mandatory for the pthread build), `?v=` URLs are
+// immutable, and lean.wasm is assembled from its <25 MB chunks when only the
+// split build exists (dist/). Nothing here talks to lean.cau.li.
+//
+// The wasm is served brotli-compressed, like Cloudflare's edge does. That is not
+// a nicety: Chromium refuses to cache a ~96 MB uncompressed response, so an
+// identity body would mean re-downloading the binary on every visit.
+import { createReadStream, createWriteStream, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
+import { once } from 'node:events';
+import { constants, createBrotliCompress } from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -19,7 +27,6 @@ const argValue = (name, fallback) => {
 const root = resolve(argValue('dir', 'site'));
 const port = Number(argValue('port', process.env.PORT || 8788));
 const logBytes = args.includes('--log-bytes');
-const upstream = 'https://lean.cau.li';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -35,99 +42,144 @@ const TYPES = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-const RUNTIME = /^\/lean-wasm\/(lean\.(js|wasm)|core-layer\.json|core-lib\/artifacts-\d{3}\.pack)$/;
-
-function isolate(headers) {
-  headers.set('cross-origin-opener-policy', 'same-origin');
-  headers.set('cross-origin-embedder-policy', 'require-corp');
-  return headers;
-}
-
-async function proxyRuntime(pathname, search, method, res) {
-  const key = pathname.replace(/^\/lean-wasm\//, '');
-  const version = new URLSearchParams(search).get('v');
-  if (version && !/^[0-9A-Za-z._-]+$/.test(version)) {
-    res.writeHead(400, { 'content-type': 'text/plain' }).end('invalid asset version');
-    return;
-  }
-  // Ask upstream for identity bytes, exactly like the Pages Function, so no
-  // encoding layer is handed through twice.
-  const url = `${upstream}/lean-wasm/${key}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
-  let upstreamRes;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      upstreamRes = await fetch(url, { headers: { 'accept-encoding': 'identity' } });
-      if (upstreamRes.ok) break;
-    } catch (error) {
-      upstreamRes = error;
-    }
-    await new Promise((done) => setTimeout(done, 400 * (attempt + 1)));
-  }
-  if (!(upstreamRes instanceof Response) || !upstreamRes.ok || !upstreamRes.body) {
-    const status = upstreamRes instanceof Response ? upstreamRes.status : 0;
-    // Datacenter IPs (CI runners) can be challenged by upstream's edge; say so
-    // here rather than letting the browser try to compile an error page as wasm.
-    console.error(`[upstream] ${key}: ${status || upstreamRes?.message || 'unreachable'}`);
-    res.writeHead(502, {
-      'content-type': 'text/plain; charset=utf-8',
-      'x-upstream-status': String(status),
-      'cache-control': 'no-store',
-    }).end(`upstream ${status || 'unreachable'} for ${key}\n`);
-    return;
-  }
-  const ext = extname(key);
-  const headers = isolate(new Headers({
-    'content-type': TYPES[ext] || 'application/octet-stream',
-    'cache-control': version ? 'public, max-age=31536000, immutable' : 'public, max-age=86400',
+function runtimeHeaders(extra = {}) {
+  return {
+    'cross-origin-opener-policy': 'same-origin',
+    'cross-origin-embedder-policy': 'require-corp',
     'cross-origin-resource-policy': 'same-origin',
-  }));
-  res.writeHead(200, Object.fromEntries(headers));
-  if (method === 'HEAD') { res.end(); return; }
-  let sent = 0;
-  for await (const chunk of upstreamRes.body) { res.write(chunk); sent += chunk.length; }
-  res.end();
-  // Ground truth for "is the browser re-downloading the runtime?": worker and
-  // sub-worker fetches never show up in page-level CDP/timing, but they always
-  // hit this server.
-  if (logBytes) console.log(`[bytes] ${method} ${key} ${sent}`);
+    ...extra,
+  };
 }
 
-const server = createServer(async (req, res) => {
+const cacheable = (search) => (new URLSearchParams(search).has('v')
+  ? 'public, max-age=31536000, immutable'
+  : 'public, max-age=86400');
+
+/** Write chunk-000, chunk-001, … into one file (what the Pages Function streams). */
+async function assembleWasmToFile(destination) {
+  const manifest = JSON.parse(readFileSync(join(root, 'lean-wasm', 'runtime.json'), 'utf8'));
+  const out = createWriteStream(destination);
+  try {
+    for (const name of manifest.wasm.chunks) {
+      const chunk = await new Promise((done, fail) => {
+        const parts = [];
+        createReadStream(join(root, 'lean-wasm', name))
+          .on('data', (part) => parts.push(part))
+          .on('end', () => done(Buffer.concat(parts)))
+          .on('error', fail);
+      });
+      if (!out.write(chunk)) await once(out, 'drain');
+    }
+  } finally {
+    out.end();
+    await once(out, 'finish');
+  }
+  return manifest;
+}
+
+/** The whole lean.wasm, assembled into a temp file when only chunks are shipped. */
+async function ensureWasm() {
+  const full = join(root, 'lean-wasm', 'lean.wasm');
+  if (existsSync(full) && statSync(full).size > 0) {
+    const size = statSync(full).size;
+    return { source: full, size, identity: String(size) };
+  }
+  if (!existsSync(join(root, 'lean-wasm', 'runtime.json'))) {
+    throw new Error('neither lean.wasm nor runtime.json is present — run: npm run prepare:runtime');
+  }
+  const manifest = JSON.parse(readFileSync(join(root, 'lean-wasm', 'runtime.json'), 'utf8'));
+  const identity = manifest.wasm.sha256 ?? String(manifest.wasm.bytes);
+  const source = join(tmpdir(), `lean-tutorials-${identity.slice(0, 16)}.wasm`);
+  if (!existsSync(source) || statSync(source).size !== manifest.wasm.bytes) {
+    await assembleWasmToFile(`${source}.part`);
+    renameSync(`${source}.part`, source);
+  }
+  return { source, size: manifest.wasm.bytes, identity };
+}
+
+async function ensureBrotli(source, identity) {
+  const compressed = join(tmpdir(), `lean-tutorials-${identity.slice(0, 16)}.wasm.br`);
+  if (!existsSync(compressed) || statSync(compressed).size === 0) {
+    await pipeline(
+      createReadStream(source),
+      createBrotliCompress({ params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }),
+      createWriteStream(`${compressed}.part`),
+    );
+    renameSync(`${compressed}.part`, compressed);
+  }
+  return compressed;
+}
+
+function serveWasm(pathname, search, method, res) {
+  const wantsBrotli = /\bbr\b/.test(res.req.headers['accept-encoding'] ?? '');
+  ensureWasm()
+    .then(async ({ source, size, identity }) => {
+      const compressed = wantsBrotli ? await ensureBrotli(source, identity) : null;
+      const file = compressed ?? source;
+      res.writeHead(200, runtimeHeaders({
+        'content-type': 'application/wasm',
+        'content-length': String(statSync(file).size),
+        'cache-control': cacheable(search),
+        ...(compressed ? { 'content-encoding': 'br', vary: 'accept-encoding' } : {}),
+      }));
+      if (method === 'HEAD') { res.end(); return; }
+      let sent = 0;
+      const stream = createReadStream(file);
+      stream.on('data', (part) => { sent += part.length; });
+      stream.on('end', () => {
+        if (logBytes) console.log(`[bytes] ${method} ${pathname} ${sent}${compressed ? ' br' : ''} of ${size}`);
+      });
+      stream.pipe(res);
+    })
+    .catch((error) => {
+      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        .end(`runtime unavailable: ${error.message}\n`);
+    });
+}
+
+const server = createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`);
   const pathname = decodeURIComponent(url.pathname);
+  const method = req.method === 'HEAD' ? 'HEAD' : 'GET';
+  const isRuntime = pathname.startsWith('/lean-wasm/');
 
-  try {
-    if (RUNTIME.test(pathname)) return await proxyRuntime(pathname, url.search, req.method, res);
-    // Any other runtime-looking path is a mistake, not the app shell.
-    if (pathname.startsWith('/lean-wasm/')) {
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end(`not a runtime asset: ${pathname}`);
-      return;
-    }
-  } catch (error) {
-    res.writeHead(502, { 'content-type': 'text/plain' }).end(`proxy failed: ${error.message}`);
+  if (pathname === '/lean-wasm/lean.wasm') {
+    serveWasm(pathname, url.search, method, res);
     return;
   }
 
   let filePath = resolve(join(root, normalize(pathname)));
   if (!filePath.startsWith(root)) { res.writeHead(403).end('forbidden'); return; }
   if (existsSync(filePath) && statSync(filePath).isDirectory()) filePath = join(filePath, 'index.html');
+
   if (!existsSync(filePath)) {
+    if (isRuntime) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end(`not a runtime asset: ${pathname}`);
+      return;
+    }
     // Hash router: extensionless paths are the app shell, missing files are 404.
     if (extname(pathname)) { res.writeHead(404, { 'content-type': 'text/plain' }).end('not found'); return; }
     filePath = join(root, 'index.html');
   }
   if (!existsSync(filePath)) { res.writeHead(404).end('not found'); return; }
 
-  const headers = isolate(new Headers({
-    'content-type': TYPES[extname(filePath)] || 'application/octet-stream',
-    'cache-control': 'no-store',
-  }));
-  res.writeHead(200, Object.fromEntries(headers));
-  if (req.method === 'HEAD') { res.end(); return; }
-  createReadStream(filePath).pipe(res);
+  const type = TYPES[extname(filePath)] || 'application/octet-stream';
+  const headers = isRuntime
+    ? runtimeHeaders({ 'content-type': type, 'cache-control': cacheable(url.search), 'content-length': String(statSync(filePath).size) })
+    : runtimeHeaders({ 'content-type': type, 'cache-control': 'no-store' });
+  res.writeHead(200, headers);
+  if (method === 'HEAD') { res.end(); return; }
+
+  let sent = 0;
+  const stream = createReadStream(filePath);
+  stream.on('data', (part) => { sent += part.length; });
+  stream.on('end', () => { if (logBytes && isRuntime) console.log(`[bytes] ${method} ${pathname} ${sent}`); });
+  stream.pipe(res);
 });
 
 server.listen(port, () => {
+  const ready = existsSync(join(root, 'lean-wasm', 'lean.wasm')) || existsSync(join(root, 'lean-wasm', 'runtime.json'));
   console.log(`lean-tutorials dev server: http://localhost:${port} (root ${root})`);
-  console.log('cross-origin isolation: on   /lean-wasm/*: proxied to ' + upstream);
+  console.log(`cross-origin isolation: on   runtime: ${ready ? 'self-hosted' : 'MISSING'}${logBytes ? '   byte logging: on' : ''}`);
+  if (!ready) console.warn('warning: no runtime in this root — run `npm run prepare:runtime` first');
 });

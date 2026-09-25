@@ -19,6 +19,7 @@ const argValue = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 const port = Number(argValue('port', 8793));
+const dir = argValue('dir', 'dist');
 const externalUrl = argValue('url', '');
 const visits = Number(argValue('visits', 3));
 if (args.includes('--fresh')) resetProfile();
@@ -26,7 +27,7 @@ if (args.includes('--fresh')) resetProfile();
 let serverLog = '';
 const server = externalUrl ? null : spawn(
   process.execPath,
-  ['scripts/serve.mjs', '--dir', 'dist', '--port', String(port), '--log-bytes'],
+  ['scripts/serve.mjs', '--dir', dir, '--port', String(port), '--log-bytes'],
   { cwd: new URL('..', import.meta.url).pathname, stdio: ['ignore', 'pipe', 'pipe'] },
 );
 server?.stdout.on('data', (chunk) => { serverLog += chunk; });
@@ -76,7 +77,17 @@ async function visit(label) {
   // i.e. 0 when the response came from the browser cache.
   const sizes = await page.evaluate(async () => {
     const entries = performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/lean-wasm/'));
-    return entries.map((entry) => ({ name: entry.name.replace(/^.*\/lean-wasm\//, '').replace(/\?.*$/, ''), transfer: entry.transferSize, decoded: entry.decodedBodySize }));
+    // The engine HEAD-probes lean.wasm first, so one URL can have two entries:
+    // keep the largest (the GET) or a 300-byte HEAD would masquerade as a fetch.
+    const byName = new Map();
+    for (const entry of entries) {
+      const name = entry.name.replace(/^.*\/lean-wasm\//, '').replace(/\?.*$/, '');
+      const previous = byName.get(name);
+      if (!previous || entry.decodedBodySize > previous.decoded) {
+        byName.set(name, { name, transfer: entry.transferSize, decoded: entry.decodedBodySize });
+      }
+    }
+    return [...byName.values()];
   });
 
   const serverLines = serverLog.split('\n').filter((line) => line.startsWith('[bytes]'));

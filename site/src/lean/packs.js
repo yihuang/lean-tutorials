@@ -5,8 +5,15 @@
 // individual `.olean`/`.ir` requests. Each pack is self-describing: an ordered
 // list of {path, offset, bytes} entries into the inflated blob.
 
+import { LEAN_ASSET_VERSION } from './config.js';
+
 const MANIFEST_URL = '/lean-wasm/core-layer.json';
 const PACK_ROOT = '/lean-wasm/core-lib';
+
+// Version every runtime URL. The runtime files live at stable paths and are
+// served `immutable` for a year, so a version bump must produce different URLs —
+// otherwise a cached pack or manifest would survive a runtime update.
+const versionSuffix = `?v=${encodeURIComponent(LEAN_ASSET_VERSION)}`;
 
 const OLEAN_MAGIC = [0x6f, 0x6c, 0x65, 0x61]; // "olea"
 
@@ -53,7 +60,7 @@ export async function* corePackStream(onProgress) {
   // Default cache mode on purpose: the manifest is pinned to the same runtime
   // release as the binary, is served with `max-age=86400`, and `no-cache` here
   // meant re-downloading 313 KB on every single visit.
-  const response = await fetch(MANIFEST_URL);
+  const response = await fetch(`${MANIFEST_URL}${versionSuffix}`);
   if (!response.ok) {
     throw new Error(`Lean core layer manifest unavailable (${response.status} ${MANIFEST_URL})`);
   }
@@ -67,7 +74,7 @@ export async function* corePackStream(onProgress) {
   let cachedBytes = 0;
 
   for (const [index, pack] of packs.entries()) {
-    const url = `${PACK_ROOT}/${pack.file}`;
+    const url = `${PACK_ROOT}/${pack.file}${versionSuffix}`;
     const packResponse = await fetch(url);
     if (!packResponse.ok) throw new Error(`Lean core pack ${pack.file} unavailable (${packResponse.status})`);
     const compressed = await packResponse.arrayBuffer();

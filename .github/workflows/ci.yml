@@ -15,6 +15,11 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The pinned browser runtime (see scripts/fetch-runtime.mjs). Cached below so
+  # only the first run of a given release pays the 277 MB download.
+  LEAN_RUNTIME_RELEASE: runtime-62b6a22-compact1
+
 jobs:
   unit:
     name: unit tests
@@ -27,6 +32,13 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      - name: Restore the pinned Lean runtime
+        uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
+      - name: Fetch and pack the runtime
+        run: npm run prepare:runtime
       - name: Build the static site
         run: npm run build
       - name: Check the output has what Pages needs
@@ -37,7 +49,22 @@ jobs:
           test -f dist/lean-worker.worker.js
           test -f dist/src/lean/config.js
           grep -q "Cross-Origin-Embedder-Policy" dist/_headers
-          echo "dist/ looks complete"
+          # Nothing may exceed Cloudflare Pages' 25 MB per-file limit.
+          big=$(find dist -type f -size +25M)
+          if [ -n "$big" ]; then echo "::error::these files exceed Pages' per-file limit: $big"; exit 1; fi
+          echo "dist/ complete: $(du -sh dist | cut -f1), largest file $(find dist -type f -printf '%s %p\n' | sort -rn | head -1)"
+      - name: Check the staged runtime matches the pinned release
+        run: |
+          set -euo pipefail
+          node -e '
+            const { createHash } = require("node:crypto");
+            const { readFileSync } = require("node:fs");
+            const runtime = JSON.parse(readFileSync("dist/lean-wasm/runtime.json", "utf8"));
+            const parts = runtime.wasm.chunks.map((name) => readFileSync(`dist/lean-wasm/${name}`));
+            const digest = createHash("sha256").update(Buffer.concat(parts)).digest("hex");
+            if (digest !== runtime.wasm.sha256) throw new Error(`assembled wasm digest ${digest} != ${runtime.wasm.sha256}`);
+            console.log(`wasm chunks reassemble to ${digest.slice(0, 16)}… (${runtime.wasm.bytes} bytes)`);
+          '
 
   browser:
     name: browser tests (real Lean kernel)
@@ -53,53 +80,21 @@ jobs:
       # the tests will not find the browser build it expects.
       - name: Install Chromium
         run: npx --yes playwright@1.63.0 install --with-deps chromium
+      - name: Restore the pinned Lean runtime
+        uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
+      - name: Fetch and pack the runtime
+        run: npm run prepare:runtime
       - name: Build the static site
         run: npm run build
       - name: Mobile geometry (no overflow, tap targets, sticky actions)
         run: node tests/layout.mjs
       - name: Contrast in light and dark mode
         run: node tests/a11y-contrast.mjs
-      - name: Check the upstream runtime is reachable from this runner
-        id: upstream
-        run: |
-          set -euo pipefail
-          version=$(node -e "import('./site/src/lean/config.js').then(m => process.stdout.write(m.LEAN_ASSET_VERSION))")
-          # Through our own proxy, so this exercises the exact path the test uses:
-          # Node's fetch, from this runner's IP, validated for content type.
-          node scripts/serve.mjs --dir site --port 8791 >/tmp/probe.log 2>&1 &
-          probe=$!
-          sleep 2
-          ok=false
-          if curl -sf --max-time 45 -o /dev/null "http://localhost:8791/lean-wasm/lean.js?v=$version" \
-             && curl -sfI --max-time 45 "http://localhost:8791/lean-wasm/lean.wasm?v=$version" | grep -qi 'application/wasm'; then
-            ok=true
-          fi
-          kill $probe 2>/dev/null || true
-          cat /tmp/probe.log
-          if [ "$ok" = "true" ]; then
-            echo "reachable=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "reachable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Upstream runtime unreachable::lean.cau.li did not serve the pinned runtime to this runner."
-            echo "Cloudflare's bot protection challenges datacenter IP ranges, so the local Lean boot test cannot run here."
-            echo "The deploy job still smoke-tests the deployed origin, which fetches upstream from Cloudflare's edge."
-          fi
-      - name: Boot Lean WASM and check every lesson
-        if: steps.upstream.outputs.reachable == 'true'
-        run: node tests/browser-check.mjs --mem 2048
-      - name: Re-run to prove a repeat visit re-downloads nothing
-        if: steps.upstream.outputs.reachable == 'true'
-        run: node tests/cache-check.mjs
-      - name: Note the skipped runtime test
-        if: steps.upstream.outputs.reachable != 'true'
-        run: |
-          {
-            echo "### Lean boot test skipped"
-            echo
-            echo "This runner could not reach the upstream runtime (likely bot protection on datacenter IPs)."
-            echo "Mobile geometry and contrast were still checked, and the deploy job smoke-tests production."
-            echo "Run \`npm run test:e2e\` locally, or point the app at a self-hosted runtime."
-          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Boot Lean WASM, check every lesson, and prove repeat visits cost nothing
+        run: node tests/browser-check.mjs --mem 2048 --fresh
 
   deploy:
     name: deploy to Cloudflare Pages
@@ -109,8 +104,8 @@ jobs:
     env:
       # Always gate on the stable production hostname. The per-deployment alias
       # (https://<hash>.lean-tutorials.pages.dev) takes a minute or two to get its
-      # certificate, so smoke-testing it immediately after a deploy fails on a
-      # deploy that is actually fine.
+      # certificate, so smoke-testing it right after a deploy fails on a deploy
+      # that is actually fine.
       SITE_URL: https://lean-tutorials.pages.dev
     steps:
       - uses: actions/checkout@v5
@@ -119,6 +114,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Restore the pinned Lean runtime
+        uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
+      - name: Fetch and pack the runtime
+        run: npm run prepare:runtime
       - run: npm run build
       - name: Deploy
         id: deploy
@@ -147,14 +149,10 @@ jobs:
             echo "- commit: \`${GITHUB_SHA:0:7}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install Chromium
-        run: npx --yes playwright@1.63.0 install --with-deps chromium
-
       - name: Smoke test the deployment
         run: |
           set -euo pipefail
           url="$SITE_URL"
-          test -n "${url}" || { echo "::error::no deployment URL"; exit 1; }
           status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
 
           # The very first request to a brand-new deployment can hit a cold start.
@@ -180,22 +178,23 @@ jobs:
           [ "$code" = "400" ] || { echo "::error::an invalid ?v= returned $code, expected 400"; exit 1; }
           echo "smoke test passed for $url"
 
-      # Informational: the runtime proxy depends on upstream's edge answering our
-      # edge. Print everything needed to diagnose it, but let the browser test
-      # below be the gate — it reports *why* the runtime did not load.
-      - name: Probe the runtime proxy
+      # The runtime must arrive compressed: an uncompressed ~96 MB body exceeds
+      # Chromium's per-entry cache limit, so it would be re-downloaded every visit.
+      # (tests/cache-check.mjs below is the end-to-end version of this assertion.)
+      - name: Check the runtime is served compressed
         run: |
-          set -uo pipefail
-          url="$SITE_URL"
-          code=$(curl -s -o /tmp/runtime.out -D /tmp/runtime.headers -w '%{http_code}' --max-time 60 "$url/lean-wasm/core-layer.json")
-          echo "core-layer.json -> $code"
-          grep -i -E '^(cf-ray|x-upstream-status|cache-control|content-type)' /tmp/runtime.headers | tr -d '\r' || true
-          echo "first 200 bytes: $(head -c 200 /tmp/runtime.out | tr '\n' ' ')"
-          curl -sI --max-time 60 "$url/lean-wasm/lean.wasm" | grep -i 'content-type' | tr -d '\r' || true
+          set -euo pipefail
+          version=$(node -e "import('./site/src/lean/config.js').then(m => process.stdout.write(m.LEAN_ASSET_VERSION))")
+          headers=$(curl -sI -H 'Accept-Encoding: br, gzip' "$SITE_URL/lean-wasm/lean.wasm?v=$version")
+          echo "$headers" | grep -i 'content-type: application/wasm' || { echo "::error::the runtime is not served as wasm"; exit 1; }
+          echo "$headers" | grep -i 'content-encoding: br' || { echo "::error::lean.wasm is not brotli-compressed, so browsers will refuse to cache it"; exit 1; }
+          echo "lean.wasm is wasm + brotli"
 
-      # The gate that matters: run the real browser tests against the deployed
-      # origin. The runtime comes through Cloudflare's edge here, so this works
-      # even when the runner's own IP is challenged by upstream.
+      - name: Install Chromium
+        run: npx --yes playwright@1.63.0 install --with-deps chromium
+
+      # The gate that matters: the real browser test suite against the deployed
+      # origin, then the cache test.
       - name: Check every lesson against the deployed site
         run: node tests/browser-check.mjs --url "$SITE_URL" --mem 2048 --fresh
 

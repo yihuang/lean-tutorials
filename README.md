@@ -30,15 +30,18 @@ site/
   src/lean/unicode.js        Lean unicode abbreviations + symbol bar
   src/lessons/index.js       lesson content
   src/ui/                    editor, prose, DOM helpers
-functions/lean-wasm/[[path]].js   Cloudflare Pages Function: same-origin runtime
-scripts/serve.mjs            local server (isolation headers + same proxy)
-scripts/build.mjs            copy site/ → dist/
+functions/lean-wasm/[[path]].js   Pages Function: streams lean.wasm from its chunks
+scripts/fetch-runtime.mjs    download the pinned upstream runtime (verified)
+scripts/pack-core-layer.mjs  pack the Init closure into 5 gzip packs
+scripts/serve.mjs            local server (isolation headers + runtime, brotli)
+scripts/build.mjs            site/ → dist/, split lean.wasm into <25 MB chunks
 tests/                       unit tests + headless-Chromium proof of life
 ```
 
 ## Quick start
 
 ```bash
+npm run prepare:runtime   # once: download the pinned Lean WASM runtime (~280 MB) and pack it
 npm run dev          # http://localhost:8788  (add ?mem=768 on low-memory machines)
 npm test             # pure-function tests, no browser needed
 npm run test:e2e     # boots the real runtime in headless Chromium and checks every lesson
@@ -70,9 +73,9 @@ byte log when the test is also the server):
 | **total** | **~47 MB** | **0 B** |
 | Lean start | ~25 s cold on a 2-vCPU box | ~17 s warm |
 
-The browser's HTTP cache holds all of it, including the 100 MB wasm: the runtime
-URLs are immutable and versioned (`?v=<release>`), the packs and manifest carry
-`max-age=86400`, and the page never uses `cache: 'no-cache'` on them. A warm
+The browser's HTTP cache holds all of it, including the 100 MB wasm: every
+runtime URL is versioned (`?v=<release>`) and served `immutable`, and the body
+arrives brotli-compressed (~16 MB), which is what makes it cacheable at all. A warm
 start on this 2-vCPU container splits as ~14 s wasm compile/instantiate, ~1.7 s
 inflating and staging the core library, ~1.5 s Init import — the compile is what
 dominates here, and it is much faster on ordinary hardware.
@@ -95,9 +98,19 @@ never be loaded cross-origin. Cross-origin isolation (`COOP: same-origin` +
 (`SharedArrayBuffer`). This is why GitHub Pages cannot host it and why the site
 serves the runtime from its own origin:
 
-- locally, `scripts/serve.mjs` proxies `/lean-wasm/*` and sets the headers,
-- on Cloudflare Pages, `functions/lean-wasm/[[path]].js` does exactly the same,
-  and `site/_headers` sets the isolation headers for the document and the worker.
+- `scripts/serve.mjs` (local) and `site/_headers` + `functions/lean-wasm/[[path]].js`
+  (Cloudflare Pages) serve and header the runtime from this origin.
+
+**The runtime is self-hosted, fetched at build time.** `npm run prepare:runtime`
+downloads the pinned release from
+[cauli/lean4-wasm-in-browser](https://github.com/cauli/lean4-wasm-in-browser)
+(Apache-2.0), verifies it against upstream's published SHA-256, and packs the Init
+closure. Earlier versions of this project proxied `lean.cau.li` at runtime
+instead, which does not work: upstream sits behind Cloudflare's bot protection,
+and it answers **403 to Cloudflare worker egress from some colos** (SJC, for
+example) while allowing others (HKG). That is not a CI nuisance — it silently
+breaks the site for entire regions. Serving the bytes ourselves removes the
+dependency, and it is also what makes caching predictable.
 
 **The runtime is pinned, not "latest".** Upstream serves two different Lean
 builds under the same path; only the versioned "compact exports" release works
@@ -147,13 +160,9 @@ gh secret set CLOUDFLARE_API_TOKEN --repo yihuang/lean-tutorials
 gh secret set CLOUDFLARE_ACCOUNT_ID --repo yihuang/lean-tutorials
 ```
 
-No secrets are needed for the test jobs, and the browser job hits the same public
-upstream runtime the site uses. One caveat, learned the hard way: **Cloudflare
-challenges datacenter IP ranges on lean.cau.li**, so a GitHub runner may be
-refused the wasm. The job probes for this through its own proxy and, if the
-runtime is not served, skips the Lean boot (with a warning and a job-summary
-note) instead of failing on an unreadable wasm. To make that gate unconditional,
-self-host the runtime (below) — then nothing external can skip it.
+No secrets are needed for the test jobs: they run against the self-hosted runtime,
+so the same kernel check that runs locally runs on the runner (the release
+download is cached between runs).
 
 Alternatively, connect the Pages project to this
 repository in the Cloudflare dashboard (build command `npm run build`, output
@@ -203,31 +212,42 @@ while and then need a restart.
 
 ## Updating the Lean runtime
 
-The runtime comes from upstream's published release (see `src/lean/config.js`):
+`scripts/fetch-runtime.mjs` pins one upstream release by tag, by byte length, and
+by SHA-256 for both `lean.js` and `lean.wasm`; `scripts/pack-core-layer.mjs` is
+deterministic, so an unchanged runtime produces byte-identical packs and Pages
+re-uploads nothing.
 
-- binary: `https://lean.cau.li/lean-wasm/lean.{js,wasm}?v=<assetVersion>`
-- packed core: `https://lean.cau.li/lean-wasm/core-layer.json` + `core-lib/*.pack`
+To move to a new release:
 
-To move to a new release, set `LEAN_ASSET_VERSION` to the new `assetVersion` from
-upstream's `deploy/runtime-release.json` and re-run `npm run test:e2e`. If the old
-release disappears, the app now fails with an explicit "pinned Lean runtime …
-is not available" message instead of a blank worker.
+1. update `RELEASE_TAG` and the pinned hashes in `scripts/fetch-runtime.mjs`
+   (from upstream's `deploy/runtime-release.json`),
+2. set `LEAN_ASSET_VERSION` in `src/lean/config.js` to that release's
+   `assetVersion` — every runtime URL carries it as `?v=`, so caches cannot mix
+   builds,
+3. `npm run prepare:runtime -- --force && npm run build`,
+4. `npm test && npm run test:e2e && npm run test:cache`.
 
-### Self-hosting the runtime instead (no third-party dependency)
+### Why lean.wasm is chunked
 
-Everything the proxy does can be served from your own account:
+Cloudflare Pages rejects any file over 25 MB, and the browser binary is ~96 MB, so
+`scripts/build.mjs` splits it into 20 MB chunks inside `dist/` and
+`functions/lean-wasm/[[path]].js` streams them back as one `application/wasm`
+body. The assembled bytes are asserted against the pinned SHA-256 in CI.
 
-1. Download `lean-runtime-fixture.tar.gz` from
-   [upstream's runtime release](https://github.com/cauli/lean4-wasm-in-browser/releases)
-   and take `runtime/lean.js` + `runtime/lean.wasm` (or the `slim/` pair).
-2. `wrangler r2 bucket create lean-assets`, upload the two files, bind the bucket
-   as `LEAN_ASSETS` in `wrangler.jsonc`, and serve them from the Function exactly
-   as upstream's own `functions/lean-wasm/[[path]].js` does.
-3. Copy `core-layer.json` and `core-lib/*.pack` into `site/lean-wasm/` and delete
-   the proxy branch — each pack is ~6.6 MB, under Pages' 25 MB per-file limit.
+Serving it compressed is load-bearing, not an optimisation: Chromium refuses to
+cache an ~96 MB uncompressed response (its per-entry limit is a fraction of the
+disk cache), so an identity body would mean re-downloading the binary on every
+visit. Cloudflare's edge compresses the Function's streamed body to ~16 MB, and
+`tests/cache-check.mjs` fails the build if a repeat visit transfers anything.
 
-Step 3 alone already removes most third-party traffic; the 100 MB wasm is the only
-file that needs R2 (or chunking) because of Pages' per-file limit.
+### Attribution
+
+The Lean WASM build and the packed core library are redistributed here from
+[cauli/lean4-wasm-in-browser](https://github.com/cauli/lean4-wasm-in-browser)
+(Apache-2.0, live at [lean.cau.li](https://lean.cau.li)); the licence is included
+as `site/UPSTREAM-LICENSE-Apache-2.0.txt` and the credit is in the site footer.
+The binaries are not committed — `npm run prepare:runtime` fetches the pinned
+release and verifies its hashes.
 
 ## Adding a lesson
 

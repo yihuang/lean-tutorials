@@ -14,7 +14,22 @@
 /src/*
   Cache-Control: public, max-age=300
 
-# Runtime bytes are immutable per Lean build and brotli-compressed by the
-# Function; the browser cache is what makes the second visit instant.
-/lean-wasm/*
-  Cache-Control: public, max-age=86400
+# The runtime is pinned by `?v=<release>` (see site/src/lean/config.js) and is
+# immutable for a given version: the app requests every runtime URL with that
+# query, so a version bump changes the URL instead of serving stale bytes.
+# This is worth getting right: caching the ~12-16 MB brotli wasm body is what
+# makes a repeat visit cost 0 bytes instead of re-downloading 96 MB.
+/lean-wasm/lean.js
+  Cache-Control: public, max-age=31536000, immutable
+/lean-wasm/lean.wasm
+  Cache-Control: public, max-age=31536000, immutable
+/lean-wasm/core-layer.json
+  Cache-Control: public, max-age=31536000, immutable
+/lean-wasm/core-lib/*
+  Cache-Control: public, max-age=31536000, immutable
+/lean-wasm/lean.wasm.part-*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Read by the Pages Function, not the browser.
+/lean-wasm/runtime.json
+  Cache-Control: public, max-age=300

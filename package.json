@@ -15,7 +15,8 @@
     "test:layout": "npm run build && node tests/layout.mjs",
     "test:a11y": "npm run build && node tests/a11y-contrast.mjs",
     "test:cache": "npm run build && node tests/cache-check.mjs",
-    "test:shots": "npm run build && node tests/screenshots.mjs"
+    "test:shots": "npm run build && node tests/screenshots.mjs",
+    "prepare:runtime": "node scripts/fetch-runtime.mjs && node scripts/pack-core-layer.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.63.0"

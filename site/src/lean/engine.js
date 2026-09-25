@@ -83,10 +83,9 @@ export class LeanEngine {
 
   async _boot() {
     this._setState('booting', 'Starting Lean runtime…');
-    // Fail loudly if the pinned runtime release is gone from upstream, or if
-    // something in between is serving HTML where wasm should be (captive
-    // portals, corporate proxies, and CI runners whose IP upstream's bot
-    // protection challenges). Without this, Emscripten reports "expected magic
+    // Fail loudly if a runtime file is missing, or if something in between is
+    // serving HTML where wasm should be (captive portals, corporate proxies,
+    // aggressive filters). Without this, Emscripten reports "expected magic
     // word" and nobody can tell what happened.
     for (const [file, expected] of [['lean.js', 'javascript'], ['lean.wasm', 'application/wasm']]) {
       const url = `${LEAN_WASM_BASE}/${file}?v=${encodeURIComponent(LEAN_ASSET_VERSION)}`;
@@ -97,9 +96,8 @@ export class LeanEngine {
         throw new Error(`could not reach the Lean runtime: ${error.message}`);
       }
       if (!response.ok) {
-        const upstream = response.headers.get('x-upstream-status');
-        throw new Error(`pinned Lean runtime ${LEAN_ASSET_VERSION} is not available for ${file} ` +
-          `(HTTP ${response.status}${upstream ? `, upstream ${upstream}` : ''}) — see site/src/lean/config.js`);
+        throw new Error(`the built-in Lean runtime is missing ${file} (HTTP ${response.status}). ` +
+          'Run `npm run prepare:runtime` and rebuild (see site/src/lean/config.js).');
       }
       const type = response.headers.get('content-type') ?? '';
       if (type && !type.includes(expected)) {
