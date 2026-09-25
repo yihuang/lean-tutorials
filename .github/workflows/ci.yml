@@ -160,12 +160,12 @@ jobs:
           # The very first request to a brand-new deployment can hit a cold start.
           ready=false
           for attempt in 1 2 3 4 5 6; do
-            if [ "$(status "$url/")" = "200" ] && curl -sf --max-time 60 -o /dev/null "$url/lean-wasm/core-layer.json"; then
+            if [ "$(status "$url/")" = "200" ]; then
               echo "ready after attempt $attempt"
               ready=true
               break
             fi
-            echo "attempt $attempt: index $(status "$url/"), runtime $(status "$url/lean-wasm/core-layer.json") — retrying"
+            echo "attempt $attempt: index $(status "$url/")"
             sleep 10
           done
           if [ "$ready" != "true" ]; then
@@ -176,10 +176,22 @@ jobs:
           headers=$(curl -sI "$url/")
           grep -qi 'cross-origin-opener-policy: same-origin' <<< "$headers" || { echo "::error::missing Cross-Origin-Opener-Policy"; exit 1; }
           grep -qi 'cross-origin-embedder-policy: require-corp' <<< "$headers" || { echo "::error::missing Cross-Origin-Embedder-Policy"; exit 1; }
-          curl -sI "$url/lean-wasm/lean.wasm" | grep -qi 'content-type: application/wasm' || { echo "::error::the runtime proxy is not serving wasm"; exit 1; }
           code=$(status "$url/lean-wasm/lean.js?v=../x")
           [ "$code" = "400" ] || { echo "::error::an invalid ?v= returned $code, expected 400"; exit 1; }
           echo "smoke test passed for $url"
+
+      # Informational: the runtime proxy depends on upstream's edge answering our
+      # edge. Print everything needed to diagnose it, but let the browser test
+      # below be the gate — it reports *why* the runtime did not load.
+      - name: Probe the runtime proxy
+        run: |
+          set -uo pipefail
+          url="$SITE_URL"
+          code=$(curl -s -o /tmp/runtime.out -D /tmp/runtime.headers -w '%{http_code}' --max-time 60 "$url/lean-wasm/core-layer.json")
+          echo "core-layer.json -> $code"
+          grep -i -E '^(cf-ray|x-upstream-status|cache-control|content-type)' /tmp/runtime.headers | tr -d '\r' || true
+          echo "first 200 bytes: $(head -c 200 /tmp/runtime.out | tr '\n' ' ')"
+          curl -sI --max-time 60 "$url/lean-wasm/lean.wasm" | grep -i 'content-type' | tr -d '\r' || true
 
       # The gate that matters: run the real browser tests against the deployed
       # origin. The runtime comes through Cloudflare's edge here, so this works
