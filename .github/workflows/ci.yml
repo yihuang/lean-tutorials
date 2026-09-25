@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Supersede in-flight runs for the same ref — except on main, where a run may be
+# in the middle of deploying.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - name: Build the static site
+        run: npm run build
+      - name: Check the output has what Pages needs
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/_headers
+          test -f dist/lean-worker.worker.js
+          test -f dist/src/lean/config.js
+          grep -q "Cross-Origin-Embedder-Policy" dist/_headers
+          echo "dist/ looks complete"
+
+  browser:
+    name: browser tests (real Lean kernel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # Must match the playwright-core version pinned in package-lock.json, or
+      # the tests will not find the browser build it expects.
+      - name: Install Chromium
+        run: npx --yes playwright@1.63.0 install --with-deps chromium
+      - name: Build the static site
+        run: npm run build
+      - name: Mobile geometry (no overflow, tap targets, sticky actions)
+        run: node tests/layout.mjs
+      - name: Contrast in light and dark mode
+        run: node tests/a11y-contrast.mjs
+      - name: Boot Lean WASM and check every lesson
+        run: node tests/browser-check.mjs --mem 2048
+      - name: Re-run to prove a repeat visit re-downloads nothing
+        run: node tests/cache-check.mjs
+
+  deploy:
+    name: deploy to Cloudflare Pages
+    needs: [unit, browser]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Deploy
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID repository secrets are not set"
+            exit 1
+          fi
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name lean-tutorials \
+            --branch main \
+            --commit-hash "${GITHUB_SHA}" \
+            --commit-message "${GITHUB_SHA:0:7} by ${GITHUB_ACTOR}" \
+            --commit-dirty=true | tee /tmp/deploy.log
+          url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/deploy.log | tail -1)
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Deployed to Cloudflare Pages"
+            echo
+            echo "- production: ${url}"
+            echo "- alias: https://lean-tutorials.pages.dev"
+            echo "- commit: \`${GITHUB_SHA:0:7}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test the deployment
+        run: |
+          set -euo pipefail
+          url="${{ steps.deploy.outputs.url }}"
+          test -n "${url}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$url/")
+          test "$code" = "200" || { echo "::error::$url returned $code"; exit 1; }
+          # Cross-origin isolation is what makes SharedArrayBuffer (and therefore
+          # the pthread Lean runtime) available; a deploy without it is broken.
+          headers=$(curl -sI "$url/")
+          echo "$headers" | grep -qi 'cross-origin-opener-policy: same-origin'
+          echo "$headers" | grep -qi 'cross-origin-embedder-policy: require-corp'
+          # The runtime proxy must actually reach upstream.
+          curl -sf "$url/lean-wasm/core-layer.json" -o /dev/null
+          curl -s -o /dev/null -w 'bad version -> %{http_code}\n' "$url/lean-wasm/lean.js?v=../x" | grep -q 400
+          echo "smoke test passed for $url"

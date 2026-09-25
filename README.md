@@ -1,5 +1,7 @@
 # Lean tutorials
 
+[![CI](https://github.com/yihuang/lean-tutorials/actions/workflows/ci.yml/badge.svg)](https://github.com/yihuang/lean-tutorials/actions/workflows/ci.yml)
+
 **Live: <https://lean-tutorials.pages.dev>** — Cloudflare Pages project `lean-tutorials`.
 
 Short, interactive Lean 4 tutorials where **the real Lean kernel checks your proof
@@ -121,11 +123,40 @@ A pass is accepted only if pass 1 has no errors **and** pass 2 reports zero
 remaining goals, and `sorry` / `admit` / `native_decide` / `Lean.ofReduceBool`
 are refused up front (comment- and string-aware).
 
-## Deploying to Cloudflare Pages
+## Continuous deployment
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+| job | what it proves |
+|---|---|
+| `unit` | pure functions, lesson data shape, and that `dist/` has `_headers` + the worker |
+| `browser` | mobile geometry, contrast in both schemes, **a real Lean WASM boot that kernel-checks every lesson**, and that a repeat visit re-downloads 0 bytes |
+| `deploy` | on `main` only, after both pass: `wrangler pages deploy`, then a smoke test for HTTP 200, the COOP/COEP headers, the runtime proxy, and `?v=` validation |
+
+Required repository secrets (Settings → Secrets and variables → Actions):
+
+```
+CLOUDFLARE_API_TOKEN   token with Pages:Edit
+CLOUDFLARE_ACCOUNT_ID  the account that owns the lean-tutorials project
+```
+
+Set them with the CLI:
+
+```bash
+gh secret set CLOUDFLARE_API_TOKEN --repo yihuang/lean-tutorials
+gh secret set CLOUDFLARE_ACCOUNT_ID --repo yihuang/lean-tutorials
+```
+
+No secrets are needed for the test jobs, and the browser job hits the same public
+upstream runtime the site uses. Alternatively, connect the Pages project to this
+repository in the Cloudflare dashboard (build command `npm run build`, output
+directory `dist`) and drop the deploy job — Cloudflare would then build each push
+itself.
+
+## Deploying by hand
 
 The site is static (`dist/`) plus one Pages Function. `_headers` must ship, or
 `SharedArrayBuffer` is unavailable and Lean cannot start.
-
 ```bash
 export CLOUDFLARE_API_TOKEN=…       # a token with Pages:Edit, or `npx wrangler@4 login`
 export CLOUDFLARE_ACCOUNT_ID=…

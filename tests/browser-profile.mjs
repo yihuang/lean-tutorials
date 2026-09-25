@@ -16,13 +16,14 @@ export const profileDir = join(artifactsDir, 'chrome-profile');
 
 export function findChrome() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-  const cache = join(homedir(), '.cache', 'ms-playwright');
+  const cache = process.env.PLAYWRIGHT_BROWSERS_PATH || join(homedir(), '.cache', 'ms-playwright');
   if (!existsSync(cache)) return null;
+  // Newer Playwright builds unpack into chrome-linux64/, older ones chrome-linux/.
   return readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
+    .filter((name) => name.startsWith('chromium'))
     .sort()
     .reverse()
-    .map((entry) => join(cache, entry, 'chrome-linux64/chrome'))
+    .flatMap((entry) => ['chrome-linux64/chrome', 'chrome-linux/chrome'].map((sub) => join(cache, entry, sub)))
     .find(existsSync) ?? null;
 }
 
