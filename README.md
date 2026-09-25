@@ -35,6 +35,7 @@ scripts/fetch-runtime.mjs    download the pinned upstream runtime (verified)
 scripts/pack-core-layer.mjs  pack the Init closure into 5 gzip packs
 scripts/serve.mjs            local server (isolation headers + runtime, brotli)
 scripts/build.mjs            site/ → dist/, split lean.wasm into <25 MB chunks
+.env.example                 template for local Cloudflare credentials (.env)
 tests/                       unit tests + headless-Chromium proof of life
 ```
 
@@ -153,6 +154,9 @@ CLOUDFLARE_API_TOKEN   token with Pages:Edit
 CLOUDFLARE_ACCOUNT_ID  the account that owns the lean-tutorials project
 ```
 
+For local deploys the same two values go in `.env` (gitignored; `cp .env.example
+.env`), which wrangler loads automatically.
+
 Set them with the CLI:
 
 ```bash
@@ -174,11 +178,15 @@ itself.
 The site is static (`dist/`) plus one Pages Function. `_headers` must ship, or
 `SharedArrayBuffer` is unavailable and Lean cannot start.
 ```bash
-export CLOUDFLARE_API_TOKEN=…       # a token with Pages:Edit, or `npx wrangler@4 login`
-export CLOUDFLARE_ACCOUNT_ID=…
+cp .env.example .env      # then fill in the two values (wrangler reads .env itself)
 npx wrangler@4 pages project create lean-tutorials --production-branch main   # once
 npm run deploy
 ```
+
+`.env` holds a token with **Pages: Edit** and the account id; it is gitignored
+(`.env.example` is the committed template), and wrangler picks it up from the
+project root without any exporting. CI does not use it — the same values live in
+repository secrets there.
 
 `npm run deploy` builds `dist/` and uploads the assets, `_headers` and the
 Functions bundle to the production branch. Project settings:

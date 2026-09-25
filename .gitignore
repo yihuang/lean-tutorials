@@ -5,3 +5,8 @@ node_modules/
 tests/.artifacts/
 site/lean-wasm/
 .runtime-cache/
+
+# Local secrets (never commit); .env.example is the template
+.env
+.env.*
+!.env.example
