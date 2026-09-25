@@ -106,6 +106,12 @@ jobs:
     needs: [unit, browser]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      # Always gate on the stable production hostname. The per-deployment alias
+      # (https://<hash>.lean-tutorials.pages.dev) takes a minute or two to get its
+      # certificate, so smoke-testing it immediately after a deploy fails on a
+      # deploy that is actually fine.
+      SITE_URL: https://lean-tutorials.pages.dev
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -136,8 +142,8 @@ jobs:
           {
             echo "### Deployed to Cloudflare Pages"
             echo
-            echo "- production: ${url}"
-            echo "- alias: https://lean-tutorials.pages.dev"
+            echo "- production: $SITE_URL"
+            echo "- this deployment: ${url}"
             echo "- commit: \`${GITHUB_SHA:0:7}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -147,7 +153,7 @@ jobs:
       - name: Smoke test the deployment
         run: |
           set -euo pipefail
-          url="${{ steps.deploy.outputs.url }}"
+          url="$SITE_URL"
           test -n "${url}" || { echo "::error::no deployment URL"; exit 1; }
           status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
 
@@ -179,7 +185,7 @@ jobs:
       # origin. The runtime comes through Cloudflare's edge here, so this works
       # even when the runner's own IP is challenged by upstream.
       - name: Check every lesson against the deployed site
-        run: node tests/browser-check.mjs --url "${{ steps.deploy.outputs.url }}" --mem 2048 --fresh
+        run: node tests/browser-check.mjs --url "$SITE_URL" --mem 2048 --fresh
 
       - name: Confirm a repeat visit re-downloads nothing
-        run: node tests/cache-check.mjs --url "${{ steps.deploy.outputs.url }}"
+        run: node tests/cache-check.mjs --url "$SITE_URL"
