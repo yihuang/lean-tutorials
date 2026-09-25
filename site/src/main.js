@@ -115,6 +115,8 @@ function route() {
   if (section === 'lesson' && lessonById(param)) renderLesson(lessonById(param));
   else if (section === 'sandbox') renderSandbox();
   else renderHome();
+  // The status panel belongs to the header chip, so it must exist on every view.
+  main.prepend(statusPanel);
   window.scrollTo({ top: 0 });
 }
 
@@ -171,8 +173,6 @@ function renderHome() {
       h('p', { class: 'small muted' }, inlineProse(
         'Requirements: a browser with WebAssembly threads (SharedArrayBuffer), i.e. a cross-origin isolated page. ' +
         'On iOS the runtime needs a recent Safari; on low-memory devices it may take a couple of attempts.')))));
-
-  main.append(statusPanel);
 }
 
 // ------------------------------------------------------------------ lesson

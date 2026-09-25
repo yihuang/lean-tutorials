@@ -84,6 +84,14 @@ check(lessonMetrics.symbolHeights.every((height) => height >= 32), 'lesson: symb
 check(lessonMetrics.symbolsScrollable, 'lesson: symbol bar scrolls horizontally');
 check(lessonMetrics.actionsPosition === 'sticky', 'lesson: actions stick to the bottom on phones', lessonMetrics.actionsPosition);
 
+// The header chip must work on every view, not just the home page.
+await page.click('#engine-chip');
+const panel = await page.evaluate(() => {
+  const node = document.querySelector('#engine-panel');
+  return { visible: node ? getComputedStyle(node).display !== 'none' : false, text: (node?.textContent ?? '').replace(/\s+/g, ' ').trim() };
+});
+check(panel.visible && panel.text.length > 30, 'lesson: engine chip opens the status panel', panel.text.slice(0, 70));
+
 // The unicode abbreviation path a phone user relies on.
 await page.fill('textarea.editor', 'exact \\forall');
 await page.dispatchEvent('textarea.editor', 'input');
