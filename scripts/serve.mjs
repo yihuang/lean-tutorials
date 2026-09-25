@@ -164,7 +164,20 @@ const server = createServer((req, res) => {
       return;
     }
     // Hash router: extensionless paths are the app shell, missing files are 404.
-    if (extname(pathname)) { res.writeHead(404, { 'content-type': 'text/plain' }).end('not found'); return; }
+    // Pages serves 404.html for the latter (with a 404 status), so match it —
+    // otherwise a typo'd asset URL answers 200 with HTML, which is exactly how
+    // "HTML where wasm should be" becomes baffling.
+    if (extname(pathname)) {
+      const notFound = join(root, '404.html');
+      if (existsSync(notFound)) {
+        res.writeHead(404, { 'content-type': TYPES['.html'], 'content-length': String(statSync(notFound).size) });
+        if (method === 'HEAD') { res.end(); return; }
+        createReadStream(notFound).pipe(res);
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
+      return;
+    }
     filePath = join(root, 'index.html');
   }
   if (!existsSync(filePath)) { res.writeHead(404).end('not found'); return; }
