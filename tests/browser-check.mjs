@@ -182,7 +182,13 @@ try {
   await page.waitForSelector('textarea.editor');
   await page.fill('textarea.editor', 'rfl');
   await page.click('button.btn.primary');
-  await page.waitForFunction(() => document.querySelector('.result.ok, .banner'), null, { timeout: 120000 });
+  // Terminal states only: the in-flight state is a .banner.info, and waiting for
+  // any .banner would read the verdict while "Checking…" is still on screen.
+  await page.waitForFunction(
+    () => document.querySelector('.result.ok, .banner.err, .banner.warn'),
+    null,
+    { timeout: 120000 },
+  );
   const success = await page.evaluate(() => {
     const result = document.querySelector('.result.ok');
     const check = document.querySelector('.actions .btn.primary');
