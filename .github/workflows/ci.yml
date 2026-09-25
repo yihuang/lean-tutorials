@@ -25,15 +25,15 @@ jobs:
     name: unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - name: Restore the pinned Lean runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .runtime-cache
           key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
@@ -70,8 +70,8 @@ jobs:
     name: browser tests (real Lean kernel)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -81,7 +81,7 @@ jobs:
       - name: Install Chromium
         run: npx --yes playwright@1.63.0 install --with-deps chromium
       - name: Restore the pinned Lean runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .runtime-cache
           key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
@@ -108,14 +108,14 @@ jobs:
       # that is actually fine.
       SITE_URL: https://lean-tutorials.pages.dev
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: Restore the pinned Lean runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .runtime-cache
           key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
@@ -174,8 +174,12 @@ jobs:
           headers=$(curl -sI "$url/")
           grep -qi 'cross-origin-opener-policy: same-origin' <<< "$headers" || { echo "::error::missing Cross-Origin-Opener-Policy"; exit 1; }
           grep -qi 'cross-origin-embedder-policy: require-corp' <<< "$headers" || { echo "::error::missing Cross-Origin-Embedder-Policy"; exit 1; }
-          code=$(status "$url/lean-wasm/lean.js?v=../x")
-          [ "$code" = "400" ] || { echo "::error::an invalid ?v= returned $code, expected 400"; exit 1; }
+          # lean.wasm is assembled by the Function, which validates ?v=; the other
+          # runtime files are plain static assets that simply ignore the query.
+          code=$(status "$url/lean-wasm/lean.wasm?v=../x")
+          [ "$code" = "400" ] || { echo "::error::an invalid ?v= on lean.wasm returned $code, expected 400"; exit 1; }
+          code=$(status "$url/lean-wasm/not-a-runtime-file.pack")
+          [ "$code" = "404" ] || { echo "::error::an unknown runtime path returned $code, expected 404"; exit 1; }
           echo "smoke test passed for $url"
 
       # The runtime must arrive compressed: an uncompressed ~96 MB body exceeds

@@ -144,6 +144,12 @@ const server = createServer((req, res) => {
   const isRuntime = pathname.startsWith('/lean-wasm/');
 
   if (pathname === '/lean-wasm/lean.wasm') {
+    // Same guard as the Pages Function, so local behaviour matches production.
+    const versions = url.searchParams.getAll('v');
+    if (versions.length > 1 || (versions.length === 1 && (!versions[0] || !/^[0-9A-Za-z._-]+$/.test(versions[0])))) {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }).end('Invalid asset version');
+      return;
+    }
     serveWasm(pathname, url.search, method, res);
     return;
   }
