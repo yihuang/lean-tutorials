@@ -56,7 +56,7 @@ await phone.evaluate(() => { location.hash = '#/lesson/rfl'; });
 await phone.waitForSelector('textarea.editor');
 await phone.fill('textarea.editor', 'rfl');
 await phone.click('button.btn.primary');
-await phone.waitForSelector('.banner.ok');
+await phone.waitForSelector('.result.ok');
 await phone.waitForTimeout(200);
 await phone.screenshot({ path: join(out, 'mobile-verified.png'), fullPage: true });
 

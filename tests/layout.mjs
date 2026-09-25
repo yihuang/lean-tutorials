@@ -40,8 +40,8 @@ await isolateStorage(context);
 const page = context.pages()[0] ?? await context.newPage();
 await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
 
-const overflow = async (label) => {
-  const metrics = await page.evaluate(() => ({
+const overflow = async (label, target = page) => {
+  const metrics = await target.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
     wide: [...document.querySelectorAll('body *')].filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1)
@@ -98,6 +98,32 @@ const panel = await page.evaluate(() => {
   return { visible: node ? getComputedStyle(node).display !== 'none' : false, text: (node?.textContent ?? '').replace(/\s+/g, ' ').trim() };
 });
 check(panel.visible && panel.text.length > 30, 'lesson: engine chip opens the status panel', panel.text.slice(0, 70));
+
+// A lesson already in the solved set must show the way onward straight away
+// (seeded before the app reads storage, so no proof has to run).
+const solvedPage = await context.newPage();
+await solvedPage.addInitScript(() => {
+  try {
+    localStorage.setItem('lean-tutorials:v1', JSON.stringify({ solved: { rfl: true }, drafts: {}, sandbox: '' }));
+  } catch { /* ignore */ }
+});
+await solvedPage.goto(`${base}/#/lesson/rfl`, { waitUntil: 'domcontentloaded' });
+await solvedPage.waitForSelector('textarea.editor');
+const cta = await solvedPage.evaluate(() => {
+  const next = document.querySelector('.actions .next-step');
+  const tick = document.querySelector('.lesson-tick');
+  return {
+    visible: Boolean(next) && !next.hidden,
+    text: (next?.textContent ?? '').trim(),
+    height: next ? Math.round(next.getBoundingClientRect().height) : 0,
+    homeTick: Boolean(tick),
+  };
+});
+check(cta.visible && /^Next:/.test(cta.text), 'solved lesson offers the next step in the action row', cta.text);
+check(cta.height >= 44, 'solved lesson: next step is thumb-sized', `${cta.height}px`);
+// Three buttons in the sticky row must still fit a 390px phone.
+await overflow('solved lesson', solvedPage);
+await solvedPage.close();
 
 // The unicode abbreviation path a phone user relies on.
 await page.fill('textarea.editor', 'exact \\forall');

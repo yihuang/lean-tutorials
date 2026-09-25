@@ -182,11 +182,26 @@ try {
   await page.waitForSelector('textarea.editor');
   await page.fill('textarea.editor', 'rfl');
   await page.click('button.btn.primary');
-  await page.waitForFunction(() => document.querySelector('.banner.ok, .banner.err'), null, { timeout: 120000 });
-  const banner = await page.textContent('.banner');
-  const uiOk = /Proof verified/.test(banner);
+  await page.waitForFunction(() => document.querySelector('.result.ok, .banner'), null, { timeout: 120000 });
+  const success = await page.evaluate(() => {
+    const result = document.querySelector('.result.ok');
+    const check = document.querySelector('.actions .btn.primary');
+    const next = document.querySelector('.actions .next-step');
+    const nav = document.querySelector('.lesson-nav a.accent');
+    return {
+      headline: result?.querySelector('.result-title')?.textContent ?? '',
+      checkLabel: check?.textContent ?? '',
+      checkDone: check?.classList.contains('done') ?? false,
+      nextVisible: Boolean(next) && !next.hidden,
+      nextLabel: (next?.textContent ?? '').trim(),
+      navAccented: Boolean(nav),
+      titleSize: result ? parseFloat(getComputedStyle(result.querySelector('.result-title')).fontSize) : 0,
+    };
+  });
+  const uiOk = success.headline === 'Proof verified' && success.checkDone && success.checkLabel.includes('✓')
+    && success.nextVisible && /^Next:/.test(success.nextLabel) && success.navAccented && success.titleSize >= 16;
   if (!uiOk) failures += 1;
-  console.log(`${uiOk ? '✓' : '✗'} UI check: ${banner.trim().split('\n')[0]}`);
+  console.log(`${uiOk ? '✓' : '✗'} UI check: ${JSON.stringify(success)}`);
 
   // A blocked or rewritten runtime must produce an actionable error, not a wasm
   // "expected magic word" crash. This is exactly what CI hit when Cloudflare

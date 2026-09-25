@@ -128,6 +128,7 @@ function lessonHref(id) { return `#/lesson/${id}`; }
 
 function renderHome() {
   const solved = LESSONS.filter((lesson) => store.solved[lesson.id]).length;
+  const nextUp = LESSONS.find((lesson) => !store.solved[lesson.id]) ?? null;
 
   main.append(
     h('h1', { text: 'Proofs, checked on your own device' }),
@@ -137,19 +138,25 @@ function renderHome() {
     h('p', { class: 'small muted', text:
       `${solved} of ${LESSONS.length} lessons done. ` +
       `${engine.state === 'ready' ? 'Lean is ready — checks are instant.' : 'Lean is still warming up in the background.'}` }),
+    nextUp
+      ? h('p', {}, inlineProse(`Next up: **${nextUp.title}** — `), h('a', { href: lessonHref(nextUp.id), text: 'continue →' }))
+      : h('p', {}, inlineProse('All lessons done. Try the [sandbox](#/sandbox) with your own statements.')),
   );
 
   const list = h('ol', { class: 'lesson-list' });
   LESSONS.forEach((lesson, index) => {
+    const solved = Boolean(store.solved[lesson.id]);
     list.append(h('li', {
       class: 'lesson-item',
-      dataset: { solved: store.solved[lesson.id] ? 'true' : 'false' },
+      dataset: { solved: solved ? 'true' : 'false', next: lesson === nextUp ? 'true' : 'false' },
     }, h('a', { href: lessonHref(lesson.id) },
       h('span', { class: 'lesson-num', text: String(index + 1) }),
       h('span', { class: 'lesson-meta' },
         h('span', { class: 'lesson-title', text: lesson.title }),
         h('span', { class: 'lesson-sub' }, h('code', { text: lesson.focus }), ` — ${lesson.summary}`)),
-      h('span', { class: 'lesson-tick', text: store.solved[lesson.id] ? '✓' : '' }),
+      solved
+        ? h('span', { class: 'lesson-tick', text: '✓' })
+        : (lesson === nextUp ? h('span', { class: 'next-chip', text: 'next' }) : null),
     )));
   });
   main.append(list);
@@ -183,6 +190,8 @@ function renderLesson(lesson) {
   const next = LESSONS[index + 1];
   let tactics = store.drafts[lesson.id] ?? '';
   let checking = false;
+  // Set when the *current* editor contents were the ones the kernel accepted.
+  let verified = false;
 
   main.append(
     h('p', { class: 'eyebrow' }, `Lesson ${index + 1} of ${LESSONS.length} · `, h('code', { text: lesson.focus })),
@@ -190,7 +199,7 @@ function renderLesson(lesson) {
   );
   main.append(prose(lesson.intro));
 
-  const feedback = h('div', { class: 'feedback' });
+  const feedback = h('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
   const editor = createEditor({
     value: tactics,
     placeholder: lesson.placeholder,
@@ -200,24 +209,35 @@ function renderLesson(lesson) {
       if (value) store.drafts[lesson.id] = value;
       else delete store.drafts[lesson.id];
       saveStore();
+      // Editing after a success means the proof is no longer the verified one;
+      // the solved lesson and its way onward stay marked.
+      if (verified) { verified = false; clear(feedback); syncButtons(); }
     },
   });
 
   const checkButton = h('button', { class: 'btn primary', type: 'button', text: 'Check proof', onclick: () => runCheck() });
-  const actions = h('div', { class: 'actions' }, checkButton);
-  actions.append(
-    h('button', {
-      class: 'btn ghost', type: 'button', text: 'Clear',
-      onclick: () => {
-        editor.setValue('');
-        tactics = '';
-        delete store.drafts[lesson.id];
-        saveStore();
-        clear(feedback);
-        editor.focus();
-      },
-    }),
-  );
+  const clearButton = h('button', {
+    class: 'btn ghost', type: 'button', text: 'Clear',
+    onclick: () => {
+      editor.setValue('');
+      tactics = '';
+      delete store.drafts[lesson.id];
+      saveStore();
+      verified = false;
+      clear(feedback);
+      syncButtons();
+      editor.focus();
+    },
+  });
+  // The path onward, in the thumb-reachable action row rather than only at the
+  // bottom of the page. Hidden until the lesson is solved.
+  const nextButton = h('button', {
+    class: 'btn primary next-step', type: 'button',
+    text: next ? `Next: ${next.focus} →` : 'Sandbox →',
+    onclick: () => { location.hash = next ? lessonHref(next.id) : '#/sandbox'; },
+  });
+  nextButton.hidden = true;
+  const actions = h('div', { class: 'actions' }, checkButton, clearButton, h('span', { class: 'spacer' }), nextButton);
 
   const usedSolution = () => {
     editor.setValue(lesson.solution);
@@ -246,24 +266,32 @@ function renderLesson(lesson) {
 
   main.append(feedback);
 
+  const nextLink = h('a', { href: next ? lessonHref(next.id) : '#/sandbox', text: next ? `${next.title} →` : 'Sandbox →' });
   main.append(h('nav', { class: 'lesson-nav' },
     previous
       ? h('a', { href: lessonHref(previous.id), text: `← ${previous.title}` })
       : h('a', { href: '#/', text: '← All lessons' }),
-    next
-      ? h('a', { href: lessonHref(next.id), text: `${next.title} →` })
-      : h('a', { href: '#/sandbox', text: 'Sandbox →' })));
+    nextLink));
+
+  function syncButtons() {
+    checkButton.disabled = checking || engine.state !== 'ready';
+    checkButton.textContent = checking
+      ? 'Checking…'
+      : verified ? '✓ Verified'
+        : engine.state === 'ready' ? 'Check proof' : 'Preparing Lean…';
+    checkButton.classList.toggle('done', verified);
+    nextButton.hidden = !verified && !store.solved[lesson.id];
+    nextLink?.classList.toggle('accent', Boolean(store.solved[lesson.id]) || verified);
+  }
 
   function setChecking(value) {
     checking = value;
-    checkButton.disabled = value || engine.state !== 'ready';
-    checkButton.textContent = value
-      ? 'Checking…'
-      : engine.state === 'ready' ? 'Check proof' : 'Preparing Lean…';
+    syncButtons();
   }
 
   syncUi = () => setChecking(checking);
   setChecking(false);
+  syncButtons();
   editor.focus();
 
   async function runCheck() {
@@ -283,11 +311,13 @@ function renderLesson(lesson) {
       result = { ok: false, kind: 'runtime', headline: 'Something went wrong', detail: String(error?.message ?? error), messages: [], goals: [] };
     }
     setChecking(false);
-    renderFeedback(feedback, result, lesson);
     if (result.ok) {
+      verified = true;
       store.solved[lesson.id] = true;
       saveStore();
     }
+    renderFeedback(feedback, result, lesson);
+    syncButtons();
   }
 
   main.addEventListener('keydown', (event) => {
@@ -295,12 +325,22 @@ function renderLesson(lesson) {
   });
 }
 
-function renderFeedback(container, result, lesson) {
+function renderFeedback(container, result, lesson, context = {}) {
   clear(container);
   const tone = result.ok ? 'ok' : result.kind === 'runtime' ? 'warn' : 'err';
-  container.append(h('div', { class: `banner ${tone}` },
-    h('span', { text: result.ok ? '✓' : '✕' }),
-    h('span', {}, h('strong', { text: `${result.headline}. ` }), result.detail)));
+  if (result.ok) {
+    container.append(h('div', { class: 'result ok' },
+      h('span', { class: 'check', 'aria-hidden': 'true', text: '✓' }),
+      h('span', {},
+        h('strong', { class: 'result-title', text: 'Proof verified' }),
+        h('span', { class: 'result-detail', text: result.elapsed
+          ? `The Lean kernel checked it here · ${Math.round(result.elapsed)} ms`
+          : 'The Lean kernel checked it here' }))));
+  } else {
+    container.append(h('div', { class: `banner ${tone}` },
+      h('span', { text: '✕' }),
+      h('span', {}, h('strong', { text: `${result.headline}. ` }), result.detail)));
+  }
 
   if (result.goals?.length) {
     container.append(h('p', { class: 'eyebrow', text: result.goals.length === 1 ? 'Open goal' : 'Open goals' }));
@@ -318,14 +358,15 @@ function renderFeedback(container, result, lesson) {
       h('pre', { class: 'msg-body', text: message.message })))));
   }
 
-  if (result.ok && result.elapsed) {
-    container.append(h('p', { class: 'small muted', text: `Verified in ${Math.round(result.elapsed)} ms (second pass included).` }));
-    container.append(h('p', { class: 'small muted' }, inlineProse(
-      'Next lesson, or open the [sandbox](#/sandbox) and try your own statements.')));
-  }
   if (!result.ok && lesson) {
     container.append(h('p', { class: 'small muted', text: 'Tip: press the Hint panel, or ⌘/Ctrl+Enter to check again.' }));
   }
+  // Bring the verdict into view without yanking the page around if it is already
+  // on screen (nearest does nothing when part of it is visible).
+  container.scrollIntoView({
+    block: 'nearest',
+    behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+  });
 }
 
 // ----------------------------------------------------------------- sandbox
