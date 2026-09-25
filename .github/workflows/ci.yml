@@ -155,31 +155,27 @@ jobs:
           url="$SITE_URL"
           status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
 
-          # The very first request to a brand-new deployment can hit a cold start.
-          ready=false
+          # A brand-new deployment takes a moment to answer everywhere (cold
+          # Function start, edge propagation), and so does a new 404.html, so each
+          # assertion is retried as a set instead of firing once.
+          ok=false
           for attempt in 1 2 3 4 5 6; do
-            if [ "$(status "$url/")" = "200" ]; then
-              echo "ready after attempt $attempt"
-              ready=true
-              break
-            fi
-            echo "attempt $attempt: index $(status "$url/")"
-            sleep 10
+            echo "--- attempt $attempt ---"
+            if [ "$(status "$url/")" != "200" ]; then echo "index -> $(status "$url/")"; sleep 10; continue; fi
+            headers=$(curl -sI "$url/")
+            grep -qi 'cross-origin-opener-policy: same-origin' <<< "$headers" || { echo "missing COOP"; sleep 10; continue; }
+            grep -qi 'cross-origin-embedder-policy: require-corp' <<< "$headers" || { echo "missing COEP"; sleep 10; continue; }
+            if [ "$(status "$url/lean-wasm/lean.wasm?v=../x")" != "400" ]; then echo "invalid ?v= not rejected"; sleep 10; continue; fi
+            if [ "$(status "$url/lean-wasm/not-a-runtime-file.pack")" != "404" ]; then echo "unknown runtime path is not 404"; sleep 10; continue; fi
+            curl -sf --max-time 60 -o /dev/null "$url/lean-wasm/core-layer.json" || { echo "core-layer.json not served"; sleep 10; continue; }
+            curl -sf --max-time 60 -o /dev/null "$url/lean-wasm/core-lib/artifacts-000.pack" || { echo "core pack not served"; sleep 10; continue; }
+            ok=true
+            break
           done
-          if [ "$ready" != "true" ]; then
-            echo "::error::$url never became ready"
+          if [ "$ok" != "true" ]; then
+            echo "::error::$url did not pass the smoke test after 6 attempts"
             exit 1
           fi
-
-          headers=$(curl -sI "$url/")
-          grep -qi 'cross-origin-opener-policy: same-origin' <<< "$headers" || { echo "::error::missing Cross-Origin-Opener-Policy"; exit 1; }
-          grep -qi 'cross-origin-embedder-policy: require-corp' <<< "$headers" || { echo "::error::missing Cross-Origin-Embedder-Policy"; exit 1; }
-          # lean.wasm is assembled by the Function, which validates ?v=; the other
-          # runtime files are plain static assets that simply ignore the query.
-          code=$(status "$url/lean-wasm/lean.wasm?v=../x")
-          [ "$code" = "400" ] || { echo "::error::an invalid ?v= on lean.wasm returned $code, expected 400"; exit 1; }
-          code=$(status "$url/lean-wasm/not-a-runtime-file.pack")
-          [ "$code" = "404" ] || { echo "::error::an unknown runtime path returned $code, expected 404"; exit 1; }
           echo "smoke test passed for $url"
 
       # The runtime must arrive compressed: an uncompressed ~96 MB body exceeds
