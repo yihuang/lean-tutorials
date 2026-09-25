@@ -19,6 +19,27 @@
 
 const UPSTREAM = 'https://lean.cau.li';
 
+/** Upstream's edge occasionally hiccups; one cheap retry beats a broken boot. */
+async function fetchWithRetry(url) {
+  let last;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        // Identity body + let Cloudflare re-compress: forwarding a
+        // content-encoding risks mismatched layers at the edge.
+        headers: { 'accept-encoding': 'identity' },
+        cf: { cacheEverything: true, cacheTtl: 60 * 60 * 24 * 30 },
+      });
+      if (response.ok) return response;
+      last = response;
+    } catch (error) {
+      last = error;
+    }
+    await new Promise((done) => setTimeout(done, 400 * (attempt + 1)));
+  }
+  return last;
+}
+
 const TYPES = {
   js: 'text/javascript; charset=utf-8',
   wasm: 'application/wasm',
@@ -54,14 +75,12 @@ export async function onRequest(context) {
   // the browser asked for. Forwarding the client's `accept-encoding` and then
   // passing a content-encoding through risks mismatched encoding layers, and
   // upstream documents that trap for their own R2 path.
-  const upstream = await fetch(`${UPSTREAM}/lean-wasm/${key}${version ? `?v=${encodeURIComponent(version)}` : ''}`, {
-    headers: { 'accept-encoding': 'identity' },
-    cf: { cacheEverything: true, cacheTtl: version ? 60 * 60 * 24 * 30 : 60 * 60 * 24 },
-  });
-  if (!upstream.ok || !upstream.body) {
-    return new Response(`Upstream runtime unavailable (${upstream.status})`, {
+  const upstream = await fetchWithRetry(`${UPSTREAM}/lean-wasm/${key}${version ? `?v=${encodeURIComponent(version)}` : ''}`);
+  if (!(upstream instanceof Response) || !upstream.ok || !upstream.body) {
+    const status = upstream instanceof Response ? upstream.status : 0;
+    return new Response(`Upstream runtime unavailable (${status || 'unreachable'})`, {
       status: 502,
-      headers: { 'cache-control': 'no-store' },
+      headers: { 'cache-control': 'no-store', 'x-upstream-status': String(status) },
     });
   }
 

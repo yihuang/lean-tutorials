@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { CHROME, launchProfile, resetProfile, waitForEngine } from './browser-profile.mjs';
+import { CHROME, isolateStorage, launchProfile, resetProfile, waitForEngine } from './browser-profile.mjs';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -47,6 +47,7 @@ try {
     headless: !headed,
     viewport: { width: 900, height: 900 },
   });
+  await isolateStorage(context);
   const page = context.pages()[0] ?? await context.newPage();
   const logs = [];
   page.on('console', (message) => logs.push(`${message.type()}: ${message.text()}`));
@@ -71,7 +72,9 @@ try {
     const out = [];
     for (const lesson of LESSONS) {
       const solution = await checkLesson(engine, lesson, lesson.solution);
-      const starter = await checkLesson(engine, lesson, lesson.starter);
+      // An untouched lesson starts with an EMPTY editor (the prompt is a
+      // placeholder attribute, not content), so that is what must be refused.
+      const untouched = await checkLesson(engine, lesson, '');
       out.push({
         id: lesson.id,
         ok: solution.ok,
@@ -79,8 +82,8 @@ try {
         headline: solution.headline,
         detail: solution.detail,
         messages: (solution.messages || []).map((message) => message.message).slice(0, 3),
-        starterRejected: !starter.ok,
-        starterKind: starter.kind,
+        untouchedRejected: !untouched.ok,
+        untouchedKind: untouched.kind,
         ms: Math.round(solution.elapsed || 0),
       });
     }
@@ -88,9 +91,9 @@ try {
   });
 
   for (const row of matrix) {
-    const mark = row.ok && row.starterRejected ? '✓' : '✗';
+    const mark = row.ok && row.untouchedRejected ? '✓' : '✗';
     if (mark === '✗') failures += 1;
-    results.push(`${mark} ${row.id.padEnd(10)} ${row.ok ? 'solution ok' : `${row.kind}: ${row.headline}`} · starter ${row.starterRejected ? 'rejected' : 'ACCEPTED'} · ${row.ms}ms`);
+    results.push(`${mark} ${row.id.padEnd(10)} ${row.ok ? 'solution ok' : `${row.kind}: ${row.headline}`} · untouched ${row.untouchedRejected ? 'rejected' : 'ACCEPTED'} · ${row.ms}ms`);
     if (!row.ok) results.push(`    detail: ${row.detail}`);
     for (const message of row.messages) results.push(`    ${message.split('\n')[0]}`);
   }
@@ -184,6 +187,27 @@ try {
   const uiOk = /Proof verified/.test(banner);
   if (!uiOk) failures += 1;
   console.log(`${uiOk ? '✓' : '✗'} UI check: ${banner.trim().split('\n')[0]}`);
+
+  // A blocked or rewritten runtime must produce an actionable error, not a wasm
+  // "expected magic word" crash. This is exactly what CI hit when Cloudflare
+  // challenged the runner's datacenter IP for the pinned wasm.
+  const blocked = await context.newPage();
+  await blocked.route('**/lean-wasm/lean.wasm*', (route) => route.fulfill({
+    status: route.request().method() === 'HEAD' ? 200 : 502,
+    headers: { 'content-type': route.request().method() === 'HEAD' ? 'text/html' : 'text/plain' },
+    body: route.request().method() === 'HEAD' ? '' : 'upstream 403',
+  }));
+  await blocked.goto(`${base}/?mem=${mem}`, { waitUntil: 'domcontentloaded' });
+  await blocked.waitForFunction(
+    () => window.leanTutorials?.engine?.state === 'error',
+    null,
+    { timeout: 60000 },
+  );
+  const blockedMessage = await blocked.evaluate(() => window.leanTutorials.engine.error?.message ?? '');
+  const blockedOk = /not application\/wasm/.test(blockedMessage) && !/magic word/.test(blockedMessage);
+  if (!blockedOk) failures += 1;
+  console.log(`${blockedOk ? '✓' : '✗'} blocked runtime reports why: ${blockedMessage.slice(0, 130)}`);
+  await blocked.close();
 
   await context.close();
 } catch (error) {

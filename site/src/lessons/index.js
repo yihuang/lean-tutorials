@@ -13,7 +13,9 @@
  * @property {string} task what to do, one or two sentences
  * @property {string} statement Lean declaration ending in `:= by`
  * @property {string} [context] extra Lean preamble the lesson needs
- * @property {string} starter initial editor content
+ * @property {string} placeholder grey hint shown while the editor is empty —
+ *   a placeholder attribute, not content, so there is nothing to delete before
+ *   starting to type
  * @property {string} hint
  * @property {string} solution
  */
@@ -37,7 +39,7 @@ Notice what is missing: there is no "trust me". The kernel re-checks the term
 `,
     task: 'Close the goal with a single tactic.',
     statement: 'example : 1 + 1 = 2',
-    starter: '-- replace this comment with a tactic',
+    placeholder: 'write the tactic that closes this goal',
     hint: 'The tactic is called `rfl` (short for *reflexivity*). Type it and press **Check**.',
     solution: 'rfl',
   },
@@ -56,7 +58,7 @@ to pass it along.
 `,
     task: 'Use the hypothesis `hp` to close the goal.',
     statement: 'example (p : Prop) (hp : p) : p',
-    starter: '-- hp is a proof of p. Give it to the goal.',
+    placeholder: 'use the hypothesis `hp`',
     hint: '`exact hp` — `exact` wants a term whose type is exactly the goal.',
     solution: 'exact hp',
   },
@@ -77,7 +79,7 @@ away its second argument.
 `,
     task: 'Introduce both assumptions, then produce `p`.',
     statement: 'example {p q : Prop} : p → q → p',
-    starter: '-- intro the assumptions, then use the one you need',
+    placeholder: 'introduce the assumptions, then produce `p`',
     hint: '`intro hp hq` puts both assumptions in the context; `exact hp` finishes.',
     solution: 'intro hp hq\nexact hp',
   },
@@ -96,7 +98,7 @@ of \`h\` with the goal and leaves you with \`p\` to prove.
 `,
     task: 'Prove `q` using `h`.',
     statement: 'example {p q : Prop} (hp : p) (h : p → q) : q',
-    starter: '-- apply a hypothesis, then discharge what is left',
+    placeholder: 'apply a hypothesis, then prove what is left',
     hint: '`apply h` changes the goal to `p`, and `hp` proves it.',
     solution: 'apply h\nexact hp',
   },
@@ -115,7 +117,7 @@ constructor notation \`⟨hp, hq⟩\` builds the structure directly — type
 `,
     task: 'Prove `p ∧ q` in one line.',
     statement: 'example {p q : Prop} (hp : p) (hq : q) : p ∧ q',
-    starter: '-- combine the two proofs',
+    placeholder: 'combine the two proofs into one term',
     hint: 'Either `constructor` then two `exact`s, or one line: `exact ⟨hp, hq⟩`.',
     solution: 'exact ⟨hp, hq⟩',
   },
@@ -136,7 +138,7 @@ Bullets (\`·\`) keep the cases tidy; the starter shows the shape.
 `,
     task: 'Prove `q ∨ p`.',
     statement: 'example {p q : Prop} (h : p ∨ q) : q ∨ p',
-    starter: '-- split the disjunction first, then prove q ∨ p in both cases',
+    placeholder: 'split the disjunction, then handle both cases',
     hint: 'From `hp : p` you can prove `q ∨ p`' + ' with `Or.inr hp`; from `hq : q` use `Or.inl hq`.',
     solution: 'rcases h with hp | hq\n· exact Or.inr hp\n· exact Or.inl hq',
   },
@@ -155,7 +157,7 @@ statement you have to the statement you want.
 `,
     task: 'Turn `a` into `b` in the goal.',
     statement: 'example (a b : Nat) (h : a = b) : a + 1 = b + 1',
-    starter: '-- use h to rewrite the goal',
+    placeholder: 'rewrite the goal with `h`',
     hint: '`rw [h]` rewrites every `a` into `b`, giving `b + 1 = b + 1`.',
     solution: 'rw [h]',
   },
@@ -175,7 +177,7 @@ still verifies it. That is the difference between \`simp\` and
 `,
     task: 'Close the goal without naming any lemma.',
     statement: 'example (n : Nat) : n + 0 = n',
-    starter: '-- one tactic is enough',
+    placeholder: 'one tactic is enough here',
     hint: 'Plain `simp` knows `Nat.add_zero`.',
     solution: 'simp',
   },
@@ -195,7 +197,7 @@ shaped correctly.
 `,
     task: 'Prove `0 + n = n` by induction on `n`.',
     statement: 'example (n : Nat) : 0 + n = n',
-    starter: '-- start with `induction n with`, then fill in both branches',
+    placeholder: '`induction n with` — then both branches',
     hint: 'Base case: `rfl`. Step case: `rw [Nat.add_succ, ih]` — unfold `+` on `succ` and use `ih`.',
     solution: 'induction n with\n| zero => rfl\n| succ k ih => rw [Nat.add_succ, ih]',
   },
@@ -213,7 +215,7 @@ Unlike \`native_decide\`, the proof it produces is a real term the kernel checks
 `,
     task: 'Prove `a < b` from `h : a + 1 = b`.',
     statement: 'example (a b : Nat) (h : a + 1 = b) : a < b',
-    starter: '-- one tactic',
+    placeholder: 'one tactic decides this',
     hint: '`omega`. It uses every hypothesis in the context.',
     solution: 'omega',
   },

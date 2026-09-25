@@ -67,17 +67,18 @@ const CONTRAST = `
     '<div class="lesson-title">title</div>', '<div class="lesson-sub">sub</div>',
   ].join('');
   document.body.append(injected);
-  for (const selector of ${JSON.stringify([
+  for (const raw of ${JSON.stringify([
     'p', '.lesson-title', '.lesson-sub', '.eyebrow', '.statement', '.goal', '.msg-body',
     '.btn.primary', '.banner.ok', '.banner.err', '.banner.info', '.footer p', '.chip',
-    '.symbols button', '.msg-head span',
+    '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
   ])}) {
+    const [selector, pseudo] = raw.split('::');
     const element = document.querySelector(selector);
-    if (!element) { rows.push({ selector, missing: true }); continue; }
-    const style = getComputedStyle(element);
+    if (!element) { rows.push({ selector: raw, missing: true }); continue; }
+    const style = getComputedStyle(element, pseudo ? '::' + pseudo : undefined);
     rows.push({
-      selector,
-      fontSize: parseFloat(style.fontSize),
+      selector: raw,
+      fontSize: parseFloat(getComputedStyle(element).fontSize),
       bold: Number(style.fontWeight) >= 600,
       ratio: Number(ratio(parse(style.color), background(element)).toFixed(2)),
       color: style.color,
@@ -101,7 +102,7 @@ async function audit(label, colorScheme) {
     const minimum = large ? 3 : 4.5;
     const ok = row.ratio >= minimum;
     if (!ok) failures.push(`${label}/${row.selector} contrast ${row.ratio}`);
-    console.log(`${ok ? '✓' : '✗'} ${row.selector.padEnd(18)} ${String(row.ratio).padStart(6)}:1  ${row.fontSize}px${row.bold ? ' bold' : ''}  (min ${minimum})`);
+    console.log(`${ok ? '✓' : '✗'} ${row.selector.padEnd(30)} ${String(row.ratio).padStart(6)}:1  ${row.fontSize}px${row.bold ? ' bold' : ''}  (min ${minimum})`);
   }
 }
 

@@ -148,7 +148,14 @@ gh secret set CLOUDFLARE_ACCOUNT_ID --repo yihuang/lean-tutorials
 ```
 
 No secrets are needed for the test jobs, and the browser job hits the same public
-upstream runtime the site uses. Alternatively, connect the Pages project to this
+upstream runtime the site uses. One caveat, learned the hard way: **Cloudflare
+challenges datacenter IP ranges on lean.cau.li**, so a GitHub runner may be
+refused the wasm. The job probes for this through its own proxy and, if the
+runtime is not served, skips the Lean boot (with a warning and a job-summary
+note) instead of failing on an unreadable wasm. To make that gate unconditional,
+self-host the runtime (below) — then nothing external can skip it.
+
+Alternatively, connect the Pages project to this
 repository in the Cloudflare dashboard (build command `npm run build`, output
 directory `dist`) and drop the deploy job — Cloudflare would then build each push
 itself.
@@ -235,14 +242,19 @@ proving:
   intro: 'Prose with `code`, **bold** and [links](https://…).',
   task: 'Prove the goal using `h₁` and `h₂`.',
   statement: 'example (a b c : Nat) (h₁ : a ≤ b) (h₂ : b ≤ c) : a ≤ c',
-  starter: '-- one tactic is enough',
+  placeholder: 'one tactic is enough here',
   hint: '`exact Nat.le_trans h₁ h₂`',
   solution: 'exact Nat.le_trans h₁ h₂',
 }
 ```
 
+`placeholder` is a grey prompt inside an otherwise **empty** editor (the HTML
+`placeholder` attribute), so a learner never has to select and delete filler
+text before typing. `npm test` asserts that the placeholder is not the solution
+and does not look like a comment to remove.
+
 `npm test` asserts the shape of every lesson and `npm run test:e2e` proves that
-each `solution` is kernel-checked while each `starter` is rejected — add a lesson,
+each `solution` is kernel-checked while an untouched (empty) lesson is refused — add a lesson,
 re-run both, and it is covered. `tests/browser-check.mjs` also asserts that open
 goals are shown, that errors point at the learner's own lines, and that error
 messages use the learner's (not the generated file's) numbering.

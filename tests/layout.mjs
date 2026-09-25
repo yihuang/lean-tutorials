@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { launchProfile } from './browser-profile.mjs';
+import { isolateStorage, launchProfile } from './browser-profile.mjs';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -36,6 +36,7 @@ const check = (ok, label, detail = '') => {
 // The shared persistent profile: this test does not need Lean, but the page
 // starts it in the background, so a cold profile would still download 47 MB.
 const context = await launchProfile(chromium, { viewport: { width: 390, height: 844 } });
+await isolateStorage(context);
 const page = context.pages()[0] ?? await context.newPage();
 await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
 
@@ -71,12 +72,18 @@ const lessonMetrics = await page.evaluate(() => {
   return {
     editorFont: parseFloat(getComputedStyle(editor).fontSize),
     editorWidth: editor.getBoundingClientRect().width,
+    editorValue: editor.value,
+    placeholder: editor.getAttribute('placeholder') ?? '',
     checkHeight: check.getBoundingClientRect().height,
     symbolHeights: symbols.map((button) => button.getBoundingClientRect().height),
     symbolsScrollable: document.querySelector('.symbols').scrollWidth > document.querySelector('.symbols').clientWidth,
     actionsPosition: getComputedStyle(actions).position,
   };
 });
+// The prompt must be a placeholder: an empty editor means there is nothing to
+// select and delete before starting to type.
+check(lessonMetrics.editorValue === '', 'lesson: editor starts empty', JSON.stringify(lessonMetrics.editorValue));
+check(lessonMetrics.placeholder.length > 8, 'lesson: empty editor shows a placeholder prompt', lessonMetrics.placeholder);
 check(lessonMetrics.editorFont >= 16, 'lesson: editor font ≥ 16px (no iOS focus zoom)', `${lessonMetrics.editorFont}px`);
 check(lessonMetrics.editorWidth > 300, 'lesson: editor fills the width', `${Math.round(lessonMetrics.editorWidth)}px`);
 check(lessonMetrics.checkHeight >= 44, 'lesson: Check button ≥ 44px', `${Math.round(lessonMetrics.checkHeight)}px`);

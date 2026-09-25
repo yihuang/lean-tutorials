@@ -35,6 +35,19 @@ if (!CHROME) {
 
 export const LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'];
 
+/**
+ * Wipe the tutorial's localStorage before every document load, so tests see
+ * exactly what a first-time learner sees. The profile (and its HTTP cache) is
+ * shared between runs on purpose, but saved drafts and progress must not leak
+ * across runs. Init scripts run before page scripts, which matters: the app
+ * reads storage into memory while it loads.
+ */
+export async function isolateStorage(context) {
+  await context.addInitScript(() => {
+    try { localStorage.clear(); } catch { /* opaque origin */ }
+  });
+}
+
 export function resetProfile() {
   rmSync(profileDir, { recursive: true, force: true });
 }
@@ -50,8 +63,7 @@ export async function launchProfile(chromium, overrides = {}) {
   });
 }
 
-/** Wait until the tutorial page reports a ready (or failed) Lean engine. */
-export async function waitForEngine(page, timeout = 15 * 60 * 1000) {
+/** Wait until the tutorial page reports a ready (or failed) Lean engine. */export async function waitForEngine(page, timeout = 15 * 60 * 1000) {
   await page.waitForFunction(
     () => window.leanTutorials && ['ready', 'error'].includes(window.leanTutorials.engine.state),
     null,

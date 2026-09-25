@@ -156,12 +156,16 @@ test('lesson data is complete, unique and free of placeholders', () => {
   for (const entry of LESSONS) {
     assert.ok(entry.id && !ids.has(entry.id), `duplicate id ${entry.id}`);
     ids.add(entry.id);
-    for (const field of ['title', 'focus', 'summary', 'intro', 'task', 'statement', 'starter', 'hint', 'solution']) {
+    for (const field of ['title', 'focus', 'summary', 'intro', 'task', 'statement', 'placeholder', 'hint', 'solution']) {
       assert.ok(typeof entry[field] === 'string' && entry[field].trim().length > 0, `${entry.id} is missing ${field}`);
     }
     assert.match(entry.statement, /example|theorem/, `${entry.id} statement should be a declaration`);
     assert.ok(!/\bsorry\b/.test(entry.solution), `${entry.id} solution must not use sorry`);
-    assert.ok(!/\bsorry\b/.test(entry.starter), `${entry.id} starter must not suggest sorry`);
+    assert.ok(!/\bsorry\b/.test(entry.placeholder), `${entry.id} placeholder must not suggest sorry`);
+    // The placeholder is grey text in an empty editor, not content: if it ever
+    // repeated the answer, the lesson would solve itself.
+    assert.notEqual(entry.placeholder.trim(), entry.solution.trim(), `${entry.id} placeholder must not be the solution`);
+    assert.ok(!entry.placeholder.startsWith('--'), `${entry.id} placeholder must not look like a comment to delete`);
     assert.deepEqual(forbiddenUsed(entry.solution), [], `${entry.id} solution uses a forbidden tactic`);
   }
   assert.ok(LESSONS.length >= 5);

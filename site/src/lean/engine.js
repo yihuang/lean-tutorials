@@ -83,17 +83,30 @@ export class LeanEngine {
 
   async _boot() {
     this._setState('booting', 'Starting Lean runtime…');
-    // Fail loudly if the pinned runtime release is gone from upstream, instead
-    // of letting the worker die with an opaque "Failed to load lean.js".
-    try {
-      const probe = await fetch(`${LEAN_WASM_BASE}/lean.js?v=${encodeURIComponent(LEAN_ASSET_VERSION)}`, { method: 'HEAD' });
-      if (!probe.ok) {
-        throw new Error(`pinned Lean runtime ${LEAN_ASSET_VERSION} is not available (HTTP ${probe.status}) — see site/src/lean/config.js`);
+    // Fail loudly if the pinned runtime release is gone from upstream, or if
+    // something in between is serving HTML where wasm should be (captive
+    // portals, corporate proxies, and CI runners whose IP upstream's bot
+    // protection challenges). Without this, Emscripten reports "expected magic
+    // word" and nobody can tell what happened.
+    for (const [file, expected] of [['lean.js', 'javascript'], ['lean.wasm', 'application/wasm']]) {
+      const url = `${LEAN_WASM_BASE}/${file}?v=${encodeURIComponent(LEAN_ASSET_VERSION)}`;
+      let response;
+      try {
+        response = await fetch(url, { method: 'HEAD' });
+      } catch (error) {
+        throw new Error(`could not reach the Lean runtime: ${error.message}`);
       }
-    } catch (error) {
-      throw error instanceof Error && /pinned Lean runtime/.test(error.message)
-        ? error
-        : new Error(`could not reach the Lean runtime (${error.message})`);
+      if (!response.ok) {
+        const upstream = response.headers.get('x-upstream-status');
+        throw new Error(`pinned Lean runtime ${LEAN_ASSET_VERSION} is not available for ${file} ` +
+          `(HTTP ${response.status}${upstream ? `, upstream ${upstream}` : ''}) — see site/src/lean/config.js`);
+      }
+      const type = response.headers.get('content-type') ?? '';
+      if (type && !type.includes(expected)) {
+        throw new Error(`${file} came back as "${type}", not ${expected}. ` +
+          'Something between this browser and the runtime is rewriting the response ' +
+          '(a network filter, or a block on this IP range).');
+      }
     }
     // Pack downloads are the long pole; start them immediately and let them
     // overlap with the ~25 MB (`lean.js` + `lean.wasm`) runtime download.

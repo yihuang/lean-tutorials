@@ -52,11 +52,27 @@ async function proxyRuntime(pathname, search, method, res) {
   }
   // Ask upstream for identity bytes, exactly like the Pages Function, so no
   // encoding layer is handed through twice.
-  const upstreamRes = await fetch(`${upstream}/lean-wasm/${key}${version ? `?v=${encodeURIComponent(version)}` : ''}`, {
-    headers: { 'accept-encoding': 'identity' },
-  });
-  if (!upstreamRes.ok || !upstreamRes.body) {
-    res.writeHead(502, { 'content-type': 'text/plain' }).end(`upstream ${upstreamRes.status}`);
+  const url = `${upstream}/lean-wasm/${key}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
+  let upstreamRes;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      upstreamRes = await fetch(url, { headers: { 'accept-encoding': 'identity' } });
+      if (upstreamRes.ok) break;
+    } catch (error) {
+      upstreamRes = error;
+    }
+    await new Promise((done) => setTimeout(done, 400 * (attempt + 1)));
+  }
+  if (!(upstreamRes instanceof Response) || !upstreamRes.ok || !upstreamRes.body) {
+    const status = upstreamRes instanceof Response ? upstreamRes.status : 0;
+    // Datacenter IPs (CI runners) can be challenged by upstream's edge; say so
+    // here rather than letting the browser try to compile an error page as wasm.
+    console.error(`[upstream] ${key}: ${status || upstreamRes?.message || 'unreachable'}`);
+    res.writeHead(502, {
+      'content-type': 'text/plain; charset=utf-8',
+      'x-upstream-status': String(status),
+      'cache-control': 'no-store',
+    }).end(`upstream ${status || 'unreachable'} for ${key}\n`);
     return;
   }
   const ext = extname(key);

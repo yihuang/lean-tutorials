@@ -7,7 +7,7 @@ import { mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { launchProfile, waitForEngine } from './browser-profile.mjs';
+import { isolateStorage, launchProfile, waitForEngine } from './browser-profile.mjs';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -28,6 +28,7 @@ const base = externalUrl || `http://localhost:${port}`;
 // One page at a time: each booted page holds a shared wasm memory, and two of
 // them do not fit in a small container.
 const context = await launchProfile(chromium, { viewport: { width: 390, height: 844 } });
+await isolateStorage(context);
 
 async function boot(width, height) {
   const page = await context.newPage();

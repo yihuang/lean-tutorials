@@ -181,7 +181,7 @@ function renderLesson(lesson) {
   const index = lessonIndex(lesson.id);
   const previous = LESSONS[index - 1];
   const next = LESSONS[index + 1];
-  let tactics = store.drafts[lesson.id] ?? lesson.starter;
+  let tactics = store.drafts[lesson.id] ?? '';
   let checking = false;
 
   main.append(
@@ -193,16 +193,29 @@ function renderLesson(lesson) {
   const feedback = h('div', { class: 'feedback' });
   const editor = createEditor({
     value: tactics,
+    placeholder: lesson.placeholder,
     label: 'Your tactic block',
-    onInput: (value) => { tactics = value; store.drafts[lesson.id] = value; saveStore(); },
+    onInput: (value) => {
+      tactics = value;
+      if (value) store.drafts[lesson.id] = value;
+      else delete store.drafts[lesson.id];
+      saveStore();
+    },
   });
 
   const checkButton = h('button', { class: 'btn primary', type: 'button', text: 'Check proof', onclick: () => runCheck() });
   const actions = h('div', { class: 'actions' }, checkButton);
   actions.append(
     h('button', {
-      class: 'btn ghost', type: 'button', text: 'Reset',
-      onclick: () => { editor.setValue(lesson.starter); tactics = lesson.starter; store.drafts[lesson.id] = tactics; saveStore(); clear(feedback); },
+      class: 'btn ghost', type: 'button', text: 'Clear',
+      onclick: () => {
+        editor.setValue('');
+        tactics = '';
+        delete store.drafts[lesson.id];
+        saveStore();
+        clear(feedback);
+        editor.focus();
+      },
     }),
   );
 

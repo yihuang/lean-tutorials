@@ -199,6 +199,13 @@ textarea.editor {
 }
 textarea.editor:focus { outline: none; }
 
+/* The grey hint shown while the editor is empty. `opacity: 1` because Firefox
+   fades placeholders by default, which would drop it below AA contrast. */
+textarea.editor::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 /* --------------------------------------------------------------- controls */
 
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
