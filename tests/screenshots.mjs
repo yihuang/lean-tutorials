@@ -77,7 +77,7 @@ await phone.screenshot({ path: join(out, 'mobile-verified.png'), fullPage: true 
 
 // The engine status panel, which reports what this visit downloaded.
 await phone.evaluate(() => { location.hash = '#/'; });
-await phone.waitForSelector('.lesson-list');
+await phone.waitForSelector('.topic-list');
 await phone.click('#engine-chip');
 await phone.waitForTimeout(200);
 await phone.screenshot({ path: join(out, 'mobile-engine-panel.png'), fullPage: true });
