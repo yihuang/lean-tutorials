@@ -207,6 +207,20 @@ Functions bundle to the production branch. Project settings:
 For CI later, point a Pages Git integration at this repo: build command
 `npm run build`, output directory `dist`.
 
+### Staging
+
+Every branch push deploys a **preview** at a stable URL, so a change can be tried
+by hand before it reaches production:
+
+```
+main     → https://lean-tutorials.pages.dev          (production)
+staging  → https://staging.lean-tutorials.pages.dev  (updated on every push to staging)
+```
+
+`deploy (preview)` runs the same unit/browser jobs and the same post-deploy
+verification as production; only the branch differs. Slashes in branch names become
+dashes in the hostname.
+
 Run the browser checks against the deployed origin rather than localhost:
 
 ```bash
@@ -258,18 +272,33 @@ To move to a new release:
 3. `npm run prepare:runtime -- --force && npm run build`,
 4. `npm test && npm run test:e2e && npm run test:cache`.
 
-### Why lean.wasm is chunked
+### Why the browser assembles lean.wasm
 
-Cloudflare Pages rejects any file over 25 MB, and the browser binary is ~96 MB, so
-`scripts/build.mjs` splits it into 20 MB chunks inside `dist/` and
-`functions/lean-wasm/[[path]].js` streams them back as one `application/wasm`
-body. The assembled bytes are asserted against the pinned SHA-256 in CI.
+Cloudflare Pages rejects any file over 25 MB and the browser binary is ~96 MB, so
+`scripts/build.mjs` splits it into chunks inside `dist/`. **The worker concatenates
+them itself** (`load_wasm_chunks` → one buffer → `Module.wasmBinary`), which keeps
+the deployment pure static hosting.
 
-Serving it compressed is load-bearing, not an optimisation: Chromium refuses to
-cache an ~96 MB uncompressed response (its per-entry limit is a fraction of the
-disk cache), so an identity body would mean re-downloading the binary on every
-visit. Cloudflare's edge compresses the Function's streamed body to ~16 MB, and
-`tests/cache-check.mjs` fails the build if a repeat visit transfers anything.
+That is deliberate, and it replaced a Pages Function that stitched the chunks
+server-side. On this project Functions turned out **not to run at all**: a trivial
+`functions/diag.js` deployed to a preview was never invoked (`/diag` returned the
+app shell), and `/lean-wasm/lean.wasm` answered with HTML on every deployment —
+so the site could not start Lean in production, while the local-server tests and a
+CI check that ran during deploy switchover both looked green. Two lessons are now
+encoded in the tests: the deploy smoke test asserts the *runtime itself* (the
+manifest parses, a chunk is served and is not HTML, an unknown runtime path is a
+404), and it checks the deployment's own hostname rather than the branch alias,
+which can still be answering from the previous deployment.
+
+A related Pages behaviour, worth knowing before adding a `404.html` back: with one
+present, the static layer answers every request that is not a static asset and
+Functions are never invoked (verified by A/B on two preview deployments). Since the
+Function is gone, `site/404.html` is safe again and is what makes a typo'd runtime
+URL an honest 404 instead of the app shell with a 200 status.
+
+Serving the runtime compressed still matters: the chunks arrive brotli-compressed
+(~16 MB total, and they are immutable-cached), and `tests/cache-check.mjs` fails the
+build if a repeat visit transfers anything.
 
 ### Attribution
 

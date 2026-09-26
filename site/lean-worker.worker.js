@@ -21,6 +21,12 @@ Error.stackTraceLimit = 1000;
 let libraryFiles = [];
 let moduleReady = false;
 let compileBusy = false;
+// The wasm, assembled from the static chunks the build ships. Emscripten uses
+// `Module.wasmBinary` directly and never fetches the binary itself — which is what
+// lets this site be pure static hosting (no Pages Function to concatenate them).
+// Named `assembledWasm`, not `wasmBinary`: the glue declares `var wasmBinary` at
+// this same top-level scope, and a `let` of the same name is a SyntaxError there.
+let assembledWasm = null;
 
 const assetBase = (new URLSearchParams(location.search).get('assetBase') || '/lean-wasm').replace(/\/$/, '');
 // Per-build version, appended to lean.js/lean.wasm so each build is a distinct
@@ -95,6 +101,36 @@ function pickWasmMemory() {
   return null; // let Emscripten try its own default and fail loudly
 }
 
+// Fetch the runtime in the chunks it ships as (<25 MB each: Cloudflare Pages caps a
+// single file), concatenate them, and report progress. Sequential on purpose: one
+// chunk in flight keeps peak memory at the chunk plus the final buffer.
+async function loadWasmChunks({ base, query, chunks, bytes }) {
+  const started = performance.now();
+  const buffer = new Uint8Array(bytes);
+  let offset = 0;
+  let downloaded = 0;
+  let cached = 0;
+  for (const name of chunks) {
+    const url = `${base}/${name}${query || ''}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`runtime chunk ${name} is missing (HTTP ${response.status})`);
+    const chunk = new Uint8Array(await response.arrayBuffer());
+    if (offset + chunk.length > bytes) throw new Error(`runtime chunk ${name} is larger than the runtime`);
+    buffer.set(chunk, offset);
+    offset += chunk.length;
+    // Resource timing inside the worker is the only place this traffic is visible;
+    // transferSize 0 means the browser cache answered.
+    const entry = performance.getEntriesByName(url, 'resource')[0];
+    if (entry && entry.transferSize === 0) cached += chunk.length;
+    else downloaded += entry ? entry.transferSize : chunk.length;
+    self.postMessage({ type: 'wasm_progress', loaded: offset, total: bytes, downloaded, cached });
+  }
+  if (offset !== bytes) throw new Error(`runtime chunks are incomplete (${offset} of ${bytes} bytes)`);
+  assembledWasm = buffer;
+  console.log(`[WASM] assembled ${bytes} bytes from ${chunks.length} chunks in ${(performance.now() - started).toFixed(0)}ms`);
+  self.postMessage({ type: 'wasm_ready', bytes, chunks: chunks.length, downloaded, cached });
+}
+
 function mkdirp(FS, path) {
   let current = '';
   for (const part of path.split('/').filter((p) => p)) {
@@ -158,6 +194,10 @@ self.onmessage = (event) => {
       try { writeLibFile(Module.FS, file); written++; } catch (e) { /* keep going */ }
     }
     self.postMessage({ type: 'files_added', count: written });
+  } else if (msg.type === 'load_wasm_chunks') {
+    loadWasmChunks(msg).catch((error) => {
+      self.postMessage({ type: 'error', data: 'Could not load the Lean runtime: ' + ((error && error.message) || error) });
+    });
   } else if (msg.type === 'start_worker') {
     startLeanModule();
   } else if (msg.type === 'compile') {
@@ -238,6 +278,9 @@ async function loadSnapshot(name, url) {
 
 function startLeanModule() {
   self.Module = {
+    // Hand over the assembled binary: Emscripten then skips its own fetch, which is
+    // the whole reason this works without a server-side Function.
+    wasmBinary: assembledWasm,
     // Supply the device's initial allocation and maximum to the growable runtime.
     ...(function () { const p = pickWasmMemory(); return p ? { wasmMemory: p.memory, INITIAL_MEMORY: p.bytes } : {}; })(),
     locateFile: (path) => assetBase + '/' + path + assetQ,

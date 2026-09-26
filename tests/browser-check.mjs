@@ -473,10 +473,12 @@ try {
   // "expected magic word" crash. This is exactly what CI hit when Cloudflare
   // challenged the runner's datacenter IP for the pinned wasm.
   const blocked = await context.newPage();
+  // Matches both layouts: the dev tree's single chunk (`lean.wasm`) and the built
+  // one's `lean.wasm.part-NNN`.
   await blocked.route('**/lean-wasm/lean.wasm*', (route) => route.fulfill({
     status: route.request().method() === 'HEAD' ? 200 : 502,
     headers: { 'content-type': route.request().method() === 'HEAD' ? 'text/html' : 'text/plain' },
-    body: route.request().method() === 'HEAD' ? '' : 'upstream 403',
+    body: route.request().method() === 'HEAD' ? '' : 'rewritten by a filter',
   }));
   await blocked.goto(`${base}/?mem=${mem}`, { waitUntil: 'domcontentloaded' });
   await blocked.waitForFunction(
@@ -485,7 +487,7 @@ try {
     { timeout: 60000 },
   );
   const blockedMessage = await blocked.evaluate(() => window.leanTutorials.engine.error?.message ?? '');
-  const blockedOk = /not application\/wasm/.test(blockedMessage) && !/magic word/.test(blockedMessage);
+  const blockedOk = /came back as HTML, not a runtime chunk/.test(blockedMessage) && !/magic word/.test(blockedMessage);
   if (!blockedOk) failures += 1;
   console.log(`${blockedOk ? '✓' : '✗'} blocked runtime reports why: ${blockedMessage.slice(0, 130)}`);
   await blocked.close();

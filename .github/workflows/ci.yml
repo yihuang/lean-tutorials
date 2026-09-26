@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Any branch: main deploys production, every other branch deploys a preview at
+    # https://<branch>.lean-tutorials.pages.dev for manual testing.
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -169,14 +171,25 @@ jobs:
           done
           if [ "$ready" != "true" ]; then echo "::error::$url never became ready"; exit 1; fi
 
-          # The runtime Function is the part that has silently broken before: it
-          # must answer, and it must reject an invalid ?v= with 400 rather than
-          # falling through to a 404 page.
-          code=$(status "$url/lean-wasm/lean.wasm?v=../x")
-          [ "$code" = "400" ] || { echo "::error::the runtime Function is not handling /lean-wasm/lean.wasm (invalid ?v= returned $code, expected 400)"; exit 1; }
-          code=$(status "$url/lean-wasm/lean.wasm")
-          [ "$code" = "200" ] || { echo "::error::the runtime Function did not serve lean.wasm ($code)"; exit 1; }
+          # The runtime is static and the browser assembles lean.wasm from its
+          # chunks, so the manifest and the chunks are what must be served — this is
+          # the assertion that would have caught the deployment where the runtime
+          # could not start at all.
+          curl -sf --max-time 90 -o /tmp/runtime.json "$url/lean-wasm/runtime.json" || { echo "::error::runtime.json is missing"; exit 1; }
+          node -e '
+            const manifest = require("/tmp/runtime.json");
+            if (manifest.variant !== "full") throw new Error("variant is " + manifest.variant);
+            if (!Array.isArray(manifest.wasm.chunks) || manifest.wasm.chunks.length === 0) throw new Error("no chunks");
+            console.log(`${manifest.wasm.chunks.length} chunks, ${manifest.wasm.bytes} bytes, variant ${manifest.variant}`);
+          ' || exit 1
+          first=$(node -e 'process.stdout.write(require("/tmp/runtime.json").wasm.chunks[0])')
+          curl -sf --max-time 120 -o /dev/null "$url/lean-wasm/$first" || { echo "::error::runtime chunk $first is not served"; exit 1; }
+          type=$(curl -sI --max-time 60 "$url/lean-wasm/$first" | tr -d '\r' | grep -i '^content-type' || true)
+          echo "$type" | grep -qi 'text/html' && { echo "::error::$first is served as HTML"; exit 1; }
           curl -sf --max-time 90 -o /dev/null "$url/lean-wasm/core-layer.json" || { echo "::error::core-layer.json is missing"; exit 1; }
+          # A missing runtime path must be an honest 404, not the app shell with 200.
+          code=$(status "$url/lean-wasm/not-a-runtime-file.pack")
+          [ "$code" = "404" ] || { echo "::error::an unknown runtime path returned $code, expected 404"; exit 1; }
           echo "deployment smoke test passed for $url"
 
       - name: Smoke test the branch alias
@@ -214,7 +227,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(node -e "import('./site/src/lean/config.js').then(m => process.stdout.write(m.LEAN_ASSET_VERSION))")
-          headers=$(curl -sI -H 'Accept-Encoding: br, gzip' "$SITE_URL/lean-wasm/lean.wasm?v=$version")
+          headers=$(curl -sI -H 'Accept-Encoding: br, gzip' "${{ steps.deploy.outputs.url }}/lean-wasm/lean.wasm.part-000?v=$version")
           echo "$headers" | grep -i 'content-type: application/wasm' || { echo "::error::the runtime is not served as wasm"; exit 1; }
           echo "$headers" | grep -i 'content-encoding: br' || { echo "::error::lean.wasm is not brotli-compressed, so browsers will refuse to cache it"; exit 1; }
           echo "lean.wasm is wasm + brotli"
@@ -225,7 +238,7 @@ jobs:
       # The gate that matters: the real browser test suite against the deployed
       # origin, then the cache test.
       - name: Check every lesson against the deployed site
-        run: node tests/browser-check.mjs --url "$SITE_URL" --mem 2048 --fresh
+        run: node tests/browser-check.mjs --url "${{ steps.deploy.outputs.url }}" --mem 2048 --fresh
 
       - name: Confirm a repeat visit re-downloads nothing
-        run: node tests/cache-check.mjs --url "$SITE_URL"
+        run: node tests/cache-check.mjs --url "${{ steps.deploy.outputs.url }}"

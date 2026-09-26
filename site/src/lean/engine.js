@@ -158,33 +158,47 @@ export class LeanEngine {
     return this._booting;
   }
 
+  /** The runtime manifest, validated enough to trust its chunk list. */
+  async _loadRuntimeManifest() {
+    const version = encodeURIComponent(LEAN_ASSET_VERSION);
+    let response;
+    try {
+      response = await fetch(`${LEAN_WASM_BASE}/runtime.json?v=${version}`);
+    } catch (error) {
+      throw new Error(`could not reach the Lean runtime: ${error.message}`);
+    }
+    if (!response.ok) {
+      throw new Error(`the built-in Lean runtime is missing (HTTP ${response.status} for runtime.json). ` +
+        'Run `npm run prepare:runtime` and rebuild (see site/src/lean/config.js).');
+    }
+    const manifest = await response.json().catch(() => null);
+    const chunks = manifest?.wasm?.chunks;
+    if (!manifest || !Array.isArray(chunks) || chunks.length === 0 || !manifest.wasm.bytes) {
+      throw new Error('the runtime manifest is not readable (runtime.json has no chunk list).');
+    }
+    // One chunk is enough to prove the files are actually served.
+    const probe = await fetch(`${LEAN_WASM_BASE}/${chunks[0]}?v=${version}`, { method: 'HEAD' })
+      .catch((error) => { throw new Error(`could not reach the Lean runtime: ${error.message}`); });
+    if (!probe.ok) {
+      throw new Error(`runtime chunk ${chunks[0]} is missing (HTTP ${probe.status}).`);
+    }
+    const type = probe.headers.get('content-type') ?? '';
+    if (/text\/html/.test(type)) {
+      throw new Error(`${chunks[0]} came back as HTML, not a runtime chunk. Something between this ` +
+        'browser and the runtime is rewriting the response (a network filter, or a block on this IP range).');
+    }
+    return manifest;
+  }
+
   async _boot() {
     this._mark('boot');
     this.state = 'booting';
     this._setPhase('booting', 'Starting the Lean runtime (compiling WebAssembly)');
-    // Fail loudly if a runtime file is missing, or if something in between is
-    // serving HTML where wasm should be (captive portals, corporate proxies,
-    // aggressive filters). Without this, Emscripten reports "expected magic
-    // word" and nobody can tell what happened.
-    for (const [file, expected] of [['lean.js', 'javascript'], ['lean.wasm', 'application/wasm']]) {
-      const url = `${LEAN_WASM_BASE}/${file}?v=${encodeURIComponent(LEAN_ASSET_VERSION)}`;
-      let response;
-      try {
-        response = await fetch(url, { method: 'HEAD' });
-      } catch (error) {
-        throw new Error(`could not reach the Lean runtime: ${error.message}`);
-      }
-      if (!response.ok) {
-        throw new Error(`the built-in Lean runtime is missing ${file} (HTTP ${response.status}). ` +
-          'Run `npm run prepare:runtime` and rebuild (see site/src/lean/config.js).');
-      }
-      const type = response.headers.get('content-type') ?? '';
-      if (type && !type.includes(expected)) {
-        throw new Error(`${file} came back as "${type}", not ${expected}. ` +
-          'Something between this browser and the runtime is rewriting the response ' +
-          '(a network filter, or a block on this IP range).');
-      }
-    }
+    // Fail loudly and precisely. The runtime is fetched as static chunks (no
+    // server-side assembly), so a missing manifest, a missing chunk, or HTML where
+    // a chunk should be are the three ways this breaks — and each gets its own
+    // message instead of Emscripten's "expected magic word".
+    const manifest = await this._loadRuntimeManifest();
     // Pack downloads are the long pole; start them immediately and let them
     // overlap with the ~25 MB (`lean.js` + `lean.wasm`) runtime download.
     const packs = corePackStream(({ index, count, received, total, downloadedBytes, cachedBytes }) => {
@@ -196,7 +210,7 @@ export class LeanEngine {
     });
     const firstPack = packs.next();
 
-    await this._startWorker();
+    await this._startWorker(manifest);
     this.state = 'staging';
     this._setPhase('staging', 'Loading the Lean core library');
     this._reportPackProgress();
@@ -221,7 +235,7 @@ export class LeanEngine {
     return true;
   }
 
-  _startWorker() {
+  _startWorker(manifest) {
     const ready = deferred();
     const mem = new URLSearchParams(location.search).get('mem');
     const query = workerQuery(mem ? { mem } : {});
@@ -236,6 +250,34 @@ export class LeanEngine {
           worker.postMessage({ type: 'load_library', files: [] });
           break;
         case 'library_received':
+          // The worker assembles the wasm from its chunks before booting, so the
+          // progress it reports here is real bytes, cached or downloaded.
+          worker.postMessage({
+            type: 'load_wasm_chunks',
+            base: LEAN_WASM_BASE,
+            query: `?v=${encodeURIComponent(LEAN_ASSET_VERSION)}`,
+            chunks: manifest.wasm.chunks,
+            bytes: manifest.wasm.bytes,
+          });
+          break;
+        case 'wasm_progress': {
+          const loaded = Number(message.loaded) || 0;
+          const total = Number(message.total) || manifest.wasm.bytes;
+          const mb = (value) => (value / 1048576).toFixed(1);
+          const cached = (Number(message.downloaded) || 0) === 0;
+          this._setProgress(
+            cached
+              ? `Loading the cached Lean runtime (${mb(loaded)}/${mb(total)} MB)`
+              : `Downloading the Lean runtime (${mb(loaded)}/${mb(total)} MB)`,
+            2 + Math.round((loaded / total) * 6),
+            cached ? 'from the browser cache' : 'from the network',
+          );
+          if (message.downloaded !== undefined) {
+            this.networkBytes = { downloaded: Number(message.downloaded) || 0, cached: Number(message.cached) || 0 };
+          }
+          break;
+        }
+        case 'wasm_ready':
           worker.postMessage({ type: 'start_worker' });
           break;
         case 'worker_ready':

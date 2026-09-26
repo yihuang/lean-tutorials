@@ -117,6 +117,24 @@ for (const [name, expected] of Object.entries(FILES[variant])) {
   console.log(`✓ ${name}  ${(size / 1048576).toFixed(1)} MB  ${digest.slice(0, 16)}…`);
 }
 
+// A manifest for the dev tree, where the runtime is the whole lean.wasm file rather
+// than the <25 MB chunks the Pages build splits it into (scripts/build.mjs writes
+// the chunked one into dist/). Without it `npm run dev` cannot describe the runtime
+// to the worker.
+const wasmPath = join(runtimeDir, 'lean.wasm');
+writeFileSync(join(runtimeDir, 'runtime.json'), `${JSON.stringify({
+  release: RELEASE_TAG,
+  variant,
+  assetVersion: LEAN_ASSET_VERSION,
+  wasm: {
+    bytes: statSync(wasmPath).size,
+    sha256: sha256(wasmPath),
+    chunkBytes: null,
+    chunks: ['lean.wasm'],
+  },
+}, null, 1)}\n`);
+console.log(`wrote site/lean-wasm/runtime.json (single-file manifest for dev)`);
+
 if (!LEAN_ASSET_VERSION.startsWith('62b6a22913')) {
   throw new Error(`site/src/lean/config.js pins ${LEAN_ASSET_VERSION}, but this script fetches runtime-62b6a22-compact1`);
 }
