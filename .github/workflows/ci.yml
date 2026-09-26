@@ -18,8 +18,8 @@ permissions:
   contents: read
 
 env:
-  # The pinned browser runtime (see scripts/fetch-runtime.mjs). Cached below so
-  # only the first run of a given release pays the 277 MB download.
+  # The pinned browser runtime (see scripts/fetch-runtime.mjs). Cached below so only
+  # the first run of a given release pays the 277 MB download.
   LEAN_RUNTIME_RELEASE: runtime-62b6a22-compact1
 
 jobs:
@@ -48,6 +48,7 @@ jobs:
           set -euo pipefail
           test -f dist/index.html
           test -f dist/_headers
+          test -f dist/404.html
           test -f dist/lean-worker.worker.js
           test -f dist/src/lean/config.js
           grep -q "Cross-Origin-Embedder-Policy" dist/_headers
@@ -80,8 +81,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
-      # Must match the playwright-core version pinned in package-lock.json, or
-      # the tests will not find the browser build it expects.
+      # Must match the playwright-core version pinned in package-lock.json, or the
+      # tests will not find the browser build it expects.
       - name: Install Chromium
         run: npx --yes playwright@1.63.0 install --with-deps chromium
       - name: Restore the pinned Lean runtime
@@ -107,8 +108,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # main -> production; any other branch -> https://<branch>.lean-tutorials.pages.dev,
-      # which is stable per branch and never touches production. Slashes become
-      # dashes because a Pages hostname cannot contain one.
+      # a stable per-branch URL that never touches production. Slashes become dashes
+      # because a Pages hostname cannot contain one.
       SITE_URL: ${{ github.ref == 'refs/heads/main' && 'https://lean-tutorials.pages.dev' || format('https://{0}.lean-tutorials.pages.dev', github.ref_name) }}
       SITE_BRANCH: ${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
     steps:
@@ -154,6 +155,9 @@ jobs:
             echo "- commit: \`${GITHUB_SHA:0:7}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Gate on the deployment's own hostname, never on a branch alias: the alias can
+      # still be answering from the previous deployment during switchover, which is
+      # exactly how a deployment whose runtime could not start passed this check once.
       - name: Smoke test the deployment itself
         run: |
           set -euo pipefail
@@ -161,25 +165,28 @@ jobs:
           test -n "$url" || { echo "::error::no deployment URL"; exit 1; }
           status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
 
-          # The per-deployment hostname gets its certificate a minute or two after
-          # the deploy, so retry rather than declaring a healthy deploy broken.
+          # The per-deployment hostname gets its certificate a minute or two after the
+          # deploy, so retry rather than declaring a healthy deploy broken.
           ready=false
-          for attempt in 1 2 3 4 5 6 7 8; do
+          for attempt in $(seq 1 8); do
             if [ "$(status "$url/")" = "200" ]; then ready=true; break; fi
             echo "attempt $attempt: $(status "$url/") — retrying"
             sleep 15
           done
           if [ "$ready" != "true" ]; then echo "::error::$url never became ready"; exit 1; fi
 
-          # The runtime is static and the browser assembles lean.wasm from its
-          # chunks, so the manifest and the chunks are what must be served — this is
-          # the assertion that would have caught the deployment where the runtime
-          # could not start at all.
+          headers=$(curl -sI "$url/")
+          grep -qi 'cross-origin-opener-policy: same-origin' <<< "$headers" || { echo "::error::missing Cross-Origin-Opener-Policy"; exit 1; }
+          grep -qi 'cross-origin-embedder-policy: require-corp' <<< "$headers" || { echo "::error::missing Cross-Origin-Embedder-Policy"; exit 1; }
+
+          # The runtime is static: the browser assembles lean.wasm from the chunks in
+          # runtime.json. These are the assertions that would have caught the
+          # deployment whose runtime could not start at all.
           curl -sf --max-time 90 -o /tmp/runtime.json "$url/lean-wasm/runtime.json" || { echo "::error::runtime.json is missing"; exit 1; }
           node -e '
             const manifest = require("/tmp/runtime.json");
             if (manifest.variant !== "full") throw new Error("variant is " + manifest.variant);
-            if (!Array.isArray(manifest.wasm.chunks) || manifest.wasm.chunks.length === 0) throw new Error("no chunks");
+            if (!Array.isArray(manifest.wasm.chunks) || manifest.wasm.chunks.length === 0) throw new Error("no chunk list");
             console.log(`${manifest.wasm.chunks.length} chunks, ${manifest.wasm.bytes} bytes, variant ${manifest.variant}`);
           ' || exit 1
           first=$(node -e 'process.stdout.write(require("/tmp/runtime.json").wasm.chunks[0])')
@@ -187,17 +194,14 @@ jobs:
           type=$(curl -sI --max-time 60 "$url/lean-wasm/$first" | tr -d '\r' | grep -i '^content-type' || true)
           echo "$type" | grep -qi 'text/html' && { echo "::error::$first is served as HTML"; exit 1; }
           curl -sf --max-time 90 -o /dev/null "$url/lean-wasm/core-layer.json" || { echo "::error::core-layer.json is missing"; exit 1; }
-          # A missing runtime path must be an honest 404, not the app shell with 200.
           code=$(status "$url/lean-wasm/not-a-runtime-file.pack")
           [ "$code" = "404" ] || { echo "::error::an unknown runtime path returned $code, expected 404"; exit 1; }
           echo "deployment smoke test passed for $url"
 
+      # Informational: the alias is what users open, but Cloudflare repoints it minutes
+      # after a deployment, and a gate that fails on platform propagation timing is a
+      # gate people learn to ignore.
       - name: Note the branch alias state
-        # Informational on purpose. The alias is what users open, but Cloudflare
-        # repoints it minutes after a deployment, and a gate that fails on platform
-        # propagation timing is a gate people learn to ignore. The deployment itself
-        # — the artifact that was shipped — was verified above, and the browser suite
-        # below runs against it. This step reports whether the alias has caught up.
         run: |
           set -uo pipefail
           url="$SITE_URL"
@@ -213,18 +217,19 @@ jobs:
             sleep 15
           done
           if [ "$ok" = "true" ]; then
-            echo "### Branch alias is serving this deployment" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Branch alias serving this deployment" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning title=Branch alias lags::$url is still answering from an earlier deployment (the deployment itself passed its checks). Cloudflare repoints branch aliases minutes after a deploy."
-            echo "### Branch alias has not caught up" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "$SITE_URL still answered from an earlier deployment after ~3 minutes. The deployment that was shipped (above) passed its own smoke test." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=Branch alias lags::$url still answered from an earlier deployment after ~3 minutes (the deployment itself passed its checks above)."
+            {
+              echo "### Branch alias has not caught up"
+              echo
+              echo "$SITE_URL still answered from an earlier deployment after ~3 minutes. The deployment that was shipped passed its own smoke test."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # The runtime is ~96 MB of chunks before compression. If they are not
-      # brotli-compressed on the wire, Chromium refuses to cache them and every
-      # visit re-downloads the lot — tests/cache-check.mjs below is the end-to-end
-      # version of this assertion.
+      # brotli-compressed on the wire, Chromium refuses to cache them and every visit
+      # re-downloads the lot — tests/cache-check.mjs is the end-to-end version.
       - name: Check the runtime chunks arrive compressed
         run: |
           set -euo pipefail
@@ -238,160 +243,7 @@ jobs:
 
       - name: Install Chromium
         run: npx --yes playwright@1.63.0 install --with-deps chromium
-      - name: Restore the pinned Lean runtime
-        uses: actions/cache@v6
-        with:
-          path: .runtime-cache
-          key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
-      - name: Fetch and pack the runtime
-        run: npm run prepare:runtime
-      - name: Build the static site
-        run: npm run build
-      - name: Mobile geometry (no overflow, tap targets, sticky actions)
-        run: node tests/layout.mjs
-      - name: Contrast in light and dark mode
-        run: node tests/a11y-contrast.mjs
-      - name: Boot Lean WASM, check every lesson, and prove repeat visits cost nothing
-        run: node tests/browser-check.mjs --mem 2048 --fresh
 
-  deploy:
-    name: deploy (${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }})
-    needs: [unit, browser]
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    env:
-      # main -> production; any other branch -> https://<branch>.lean-tutorials.pages.dev,
-      # which is stable per branch and never touches production. Slashes become
-      # dashes because a Pages hostname cannot contain one.
-      SITE_URL: ${{ github.ref == 'refs/heads/main' && 'https://lean-tutorials.pages.dev' || format('https://{0}.lean-tutorials.pages.dev', github.ref_name) }}
-      SITE_BRANCH: ${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: Restore the pinned Lean runtime
-        uses: actions/cache@v6
-        with:
-          path: .runtime-cache
-          key: lean-runtime-${{ env.LEAN_RUNTIME_RELEASE }}
-      - name: Fetch and pack the runtime
-        run: npm run prepare:runtime
-      - run: npm run build
-      - name: Deploy
-        id: deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CLOUDFLARE_API_TOKEN}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID repository secrets are not set"
-            exit 1
-          fi
-          branch=$(printf '%s' "$SITE_BRANCH" | tr '/' '-')
-          npx --yes wrangler@4 pages deploy dist \
-            --project-name lean-tutorials \
-            --branch "$branch" \
-            --commit-hash "${GITHUB_SHA}" \
-            --commit-message "${GITHUB_SHA:0:7} by ${GITHUB_ACTOR}" \
-            --commit-dirty=true | tee /tmp/deploy.log
-          url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/deploy.log | tail -1)
-          echo "url=${url}" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Deployed to Cloudflare Pages"
-            echo
-            echo "- site: $SITE_URL"
-            echo "- this deployment: ${url}"
-            echo "- commit: \`${GITHUB_SHA:0:7}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Smoke test the deployment itself
-        run: |
-          set -euo pipefail
-          url="${{ steps.deploy.outputs.url }}"
-          test -n "$url" || { echo "::error::no deployment URL"; exit 1; }
-          status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
-
-          # The per-deployment hostname gets its certificate a minute or two after
-          # the deploy, so retry rather than declaring a healthy deploy broken.
-          ready=false
-          for attempt in 1 2 3 4 5 6 7 8; do
-            if [ "$(status "$url/")" = "200" ]; then ready=true; break; fi
-            echo "attempt $attempt: $(status "$url/") — retrying"
-            sleep 15
-          done
-          if [ "$ready" != "true" ]; then echo "::error::$url never became ready"; exit 1; fi
-
-          # The runtime is static and the browser assembles lean.wasm from its
-          # chunks, so the manifest and the chunks are what must be served — this is
-          # the assertion that would have caught the deployment where the runtime
-          # could not start at all.
-          curl -sf --max-time 90 -o /tmp/runtime.json "$url/lean-wasm/runtime.json" || { echo "::error::runtime.json is missing"; exit 1; }
-          node -e '
-            const manifest = require("/tmp/runtime.json");
-            if (manifest.variant !== "full") throw new Error("variant is " + manifest.variant);
-            if (!Array.isArray(manifest.wasm.chunks) || manifest.wasm.chunks.length === 0) throw new Error("no chunks");
-            console.log(`${manifest.wasm.chunks.length} chunks, ${manifest.wasm.bytes} bytes, variant ${manifest.variant}`);
-          ' || exit 1
-          first=$(node -e 'process.stdout.write(require("/tmp/runtime.json").wasm.chunks[0])')
-          curl -sf --max-time 120 -o /dev/null "$url/lean-wasm/$first" || { echo "::error::runtime chunk $first is not served"; exit 1; }
-          type=$(curl -sI --max-time 60 "$url/lean-wasm/$first" | tr -d '\r' | grep -i '^content-type' || true)
-          echo "$type" | grep -qi 'text/html' && { echo "::error::$first is served as HTML"; exit 1; }
-          curl -sf --max-time 90 -o /dev/null "$url/lean-wasm/core-layer.json" || { echo "::error::core-layer.json is missing"; exit 1; }
-          # A missing runtime path must be an honest 404, not the app shell with 200.
-          code=$(status "$url/lean-wasm/not-a-runtime-file.pack")
-          [ "$code" = "404" ] || { echo "::error::an unknown runtime path returned $code, expected 404"; exit 1; }
-          echo "deployment smoke test passed for $url"
-
-      - name: Note the branch alias state
-        # Informational on purpose. The alias is what users open, but Cloudflare
-        # repoints it minutes after a deployment, and a gate that fails on platform
-        # propagation timing is a gate people learn to ignore. The deployment itself
-        # — the artifact that was shipped — was verified above, and the browser suite
-        # below runs against it. This step reports whether the alias has caught up.
-        run: |
-          set -uo pipefail
-          url="$SITE_URL"
-          status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
-          ok=false
-          for attempt in $(seq 1 12); do
-            if [ "$(status "$url/")" = "200" ] && curl -sf --max-time 90 -o /dev/null "$url/lean-wasm/runtime.json"; then
-              ok=true
-              echo "alias ready after attempt $attempt"
-              break
-            fi
-            echo "attempt $attempt: index $(status "$url/")"
-            sleep 15
-          done
-          if [ "$ok" = "true" ]; then
-            echo "### Branch alias is serving this deployment" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning title=Branch alias lags::$url is still answering from an earlier deployment (the deployment itself passed its checks). Cloudflare repoints branch aliases minutes after a deploy."
-            echo "### Branch alias has not caught up" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "$SITE_URL still answered from an earlier deployment after ~3 minutes. The deployment that was shipped (above) passed its own smoke test." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      # The runtime must arrive compressed: an uncompressed ~96 MB body exceeds
-      # Chromium's per-entry cache limit, so it would be re-downloaded every visit.
-      # (tests/cache-check.mjs below is the end-to-end version of this assertion.)
-      - name: Check the runtime is served compressed
-        run: |
-          set -euo pipefail
-          version=$(node -e "import('./site/src/lean/config.js').then(m => process.stdout.write(m.LEAN_ASSET_VERSION))")
-          headers=$(curl -sI -H 'Accept-Encoding: br, gzip' "${{ steps.deploy.outputs.url }}/lean-wasm/lean.wasm.part-000?v=$version")
-          echo "$headers" | grep -i 'content-type: application/wasm' || { echo "::error::the runtime is not served as wasm"; exit 1; }
-          echo "$headers" | grep -i 'content-encoding: br' || { echo "::error::lean.wasm is not brotli-compressed, so browsers will refuse to cache it"; exit 1; }
-          echo "lean.wasm is wasm + brotli"
-
-      - name: Install Chromium
-        run: npx --yes playwright@1.63.0 install --with-deps chromium
-
-      # The gate that matters: the real browser test suite against the deployed
-      # origin, then the cache test.
       - name: Check every lesson against the deployed site
         run: node tests/browser-check.mjs --url "${{ steps.deploy.outputs.url }}" --mem 2048 --fresh
 
