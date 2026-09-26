@@ -208,7 +208,10 @@ jobs:
           status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
           ok=false
           for attempt in $(seq 1 12); do
-            if [ "$(status "$url/")" = "200" ] && curl -sf --max-time 90 -o /dev/null "$url/lean-wasm/runtime.json"; then
+            # runtime.json exists on old deployments too, so require something that
+            # only the new one has: chunks served as application/wasm.
+            if [ "$(status "$url/")" = "200" ] \
+               && curl -sI --max-time 60 "$url/lean-wasm/lean.wasm.part-000" | tr -d '\r' | grep -qi 'content-type: application/wasm'; then
               ok=true
               echo "alias ready after attempt $attempt"
               break
