@@ -146,12 +146,6 @@ window.addEventListener('hashchange', route);
 const lessonHref = (id) => `#/lesson/${id}`;
 const topicHref = (id) => `#/topic/${id}`;
 
-const pips = (topic) => h('span', { class: 'pips', 'aria-hidden': 'true' },
-  topic.lessons.map((lesson) => h('i', {
-    class: 'pip',
-    dataset: { state: isSolved(lesson.id) ? 'solved' : lesson === nextUnsolvedLesson(isSolved, [topic]) ? 'next' : 'todo' },
-  })));
-
 function lessonRow(lesson, number, nextId) {
   return h('li', {
     class: 'lesson-item',
@@ -163,7 +157,7 @@ function lessonRow(lesson, number, nextId) {
     h('span', { class: 'lesson-num', text: String(number) }),
     h('span', { class: 'lesson-meta' },
       h('span', { class: 'lesson-title', text: lesson.title }),
-      h('span', { class: 'lesson-sub' }, h('code', { text: lesson.focus }), ` — ${lesson.summary}`)),
+      h('span', { class: 'lesson-sub' }, h('code', { text: lesson.focus }), ' — ', inlineProse(lesson.summary))),
     isSolved(lesson.id)
       ? h('span', { class: 'lesson-tick', text: '✓' })
       : (lesson.id === nextId ? h('span', { class: 'next-chip', text: 'next' }) : null)));
@@ -186,7 +180,7 @@ function topicRow(topic, number, nextTopicId) {
         h('span', { text: topic.title }),
         progress.complete ? h('span', { class: 'topic-done', text: '✓' }) : null,
         topic.id === nextTopicId && !progress.complete ? h('span', { class: 'next-chip', text: 'next' }) : null),
-      h('span', { class: 'topic-desc', text: topic.summary })),
+      h('span', { class: 'topic-desc' }, inlineProse(topic.summary))),
     h('span', { class: 'topic-meter' },
       h('span', { class: 'topic-count', text: `${progress.solved}/${progress.total}` }),
       h('span', { class: 'topic-bar', 'aria-hidden': 'true' }, h('i', { style: `width: ${percent}%` })))));
@@ -201,7 +195,7 @@ function themeSection(theme) {
     h('div', { class: 'theme-head' },
       h('h2', { class: 'theme-title' }, h('span', { class: 'theme-num', text: String(index) }), theme.title),
       h('span', { class: 'theme-progress', text: `${progress.topicsSolved}/${progress.topics} topics` })),
-    h('p', { class: 'theme-summary', text: theme.summary }),
+    h('p', { class: 'theme-summary' }, inlineProse(theme.summary)),
     h('ol', { class: 'topic-list' }, theme.topics.map((id, offset) => topicRow(topicById(id), firstTopicIndex + offset + 1, nextTopic))));
 }
 
@@ -210,7 +204,7 @@ function plannedSection(theme) {
     h('div', { class: 'theme-head' },
       h('h2', { class: 'theme-title' }, theme.title),
       h('span', { class: 'planned-chip', text: 'planned' })),
-    h('p', { class: 'theme-summary', text: theme.summary }),
+    h('p', { class: 'theme-summary' }, inlineProse(theme.summary)),
     h('p', { class: 'planned-line' }, theme.planned.map((entry, index) => [
       index > 0 ? h('span', { class: 'planned-sep', text: ' · ' }) : null,
       h('span', { class: 'planned-topic', title: entry.summary, text: entry.title }),
@@ -242,7 +236,7 @@ function renderHome() {
 
   main.append(h('div', { class: 'themes' }, THEMES_AVAILABLE.map(themeSection)));
   if (THEMES_PLANNED.length > 0) {
-    main.append(h('div', { class: 'themes planned-list' },
+    main.append(h('div', { class: 'themes' },
       h('p', { class: 'eyebrow', style: 'margin-top:18px', text: 'On the roadmap' }),
       THEMES_PLANNED.map(plannedSection)));
   }

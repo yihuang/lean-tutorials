@@ -71,6 +71,7 @@ const index = await page.evaluate(() => {
     plannedTopics: document.querySelectorAll('.planned-topic').length,
     plannedLinks: [...document.querySelectorAll('.planned-topic')].filter((node) => node.closest('a')).length,
     plannedChips: document.querySelectorAll('.planned-chip').length,
+    topicSummaries: [...document.querySelectorAll('.topic-desc')].map((node) => node.textContent),
   };
 });
 check(index.themes >= 2 && index.available >= 1 && index.planned >= 2, 'index: themes, with the roadmap separate',
@@ -81,6 +82,8 @@ check(index.topics >= 5 && index.withProgress === index.topics && index.withBar 
 check(index.lessonRows === 0, 'index: no lesson rows (lessons live on the topic page)', `${index.lessonRows} found`);
 check(index.tapHeight >= 44, 'index: topic rows are tappable', `${index.tapHeight}px`);
 check(/^(Start|Continue):/.test(index.cta), 'index: a single next-step call to action', index.cta);
+check(!index.topicSummaries.some((text) => text.includes('`')), 'index: topic summaries render markup, not backticks',
+  index.topicSummaries[0]?.slice(0, 60) ?? '');
 check(index.plannedTopics >= 6 && index.plannedLinks === 0 && index.plannedChips >= 2,
   'index: roadmap entries are announced but not clickable',
   `${index.plannedTopics} planned topics, ${index.plannedLinks} inside links, ${index.plannedChips} chips`);
@@ -96,6 +99,33 @@ const topicPage = await page.evaluate(() => ({
   cta: document.querySelector('a.btn.primary')?.textContent?.trim() ?? '',
 }));
 check(topicPage.rows >= 3 && topicPage.heading === 'Logic', 'topic page lists its lessons', `${topicPage.heading}: ${topicPage.rows} lessons`);
+
+// The lesson rows must actually be styled: a stylesheet block was once deleted
+// while the markup stayed, so the topic pages rendered as bare text.
+const rowStyle = await page.evaluate(() => {
+  const row = document.querySelector('li.lesson-item a');
+  const num = document.querySelector('li.lesson-item .lesson-num');
+  const code = document.querySelector('li.lesson-item .lesson-sub code');
+  const cs = getComputedStyle(row);
+  return {
+    display: cs.display,
+    borderWidth: cs.borderTopWidth,
+    radius: parseFloat(cs.borderRadius) || 0,
+    height: Math.round(row.getBoundingClientRect().height),
+    numWidth: num ? Math.round(num.getBoundingClientRect().width) : 0,
+    codeFont: code ? getComputedStyle(code).fontFamily.slice(0, 10) : '',
+    // Every row, not just the first: the literal-backtick bug was in row four.
+    summaries: [...document.querySelectorAll('li.lesson-item .lesson-sub')].map((node) => node.textContent),
+  };
+});
+check(rowStyle.display === 'flex' && rowStyle.borderWidth === '1px' && rowStyle.radius >= 8 && rowStyle.height >= 44,
+  'topic page: lesson rows keep their card styling', JSON.stringify(rowStyle));
+check(rowStyle.numWidth >= 24 && rowStyle.codeFont.length > 0, 'topic page: number badge and focus chip are styled',
+  `${rowStyle.numWidth}px, ${rowStyle.codeFont}…`);
+// Summaries carry markdown; it must render as markup, not as literal backticks.
+const backticked = rowStyle.summaries.filter((text) => text.includes('`'));
+check(backticked.length === 0, 'topic page: summaries render markup, not backticks',
+  backticked.length ? backticked[0].slice(0, 70) : `${rowStyle.summaries.length} rows checked`);
 check(topicPage.back === '#/', 'topic page links back to all topics', topicPage.back);
 check(/→$/.test(topicPage.cta), 'topic page offers a start/continue button', topicPage.cta);
 

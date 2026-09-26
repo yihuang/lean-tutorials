@@ -139,6 +139,38 @@ p { margin: 0 0 12px; }
 
 .lesson-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
 
+/* A lesson row (topic pages). The index does not use these — it lists topics —
+   but a topic page is a list of lessons, so it needs the card affordance back. */
+.lesson-item a {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 14px; min-height: 62px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); text-decoration: none; color: var(--text);
+  box-shadow: var(--shadow);
+}
+.lesson-item a:active { transform: scale(.995); }
+.lesson-num {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--surface-2);
+  font-family: var(--mono); font-size: 13px; color: var(--muted);
+}
+.lesson-item[data-solved="true"] .lesson-num { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.lesson-item[data-next="true"] a { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.lesson-meta { flex: 1 1 auto; min-width: 0; }
+.lesson-title { font-weight: 600; font-size: 15px; }
+.lesson-sub { display: block; font-size: 13px; color: var(--muted); }
+.lesson-sub code { font-size: 12.5px; }
+.lesson-tick { margin-left: auto; color: var(--ok); font-size: 18px; }
+.next-chip {
+  flex: none;
+  font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft);
+  border-radius: 999px; padding: 3px 9px;
+}
+.next-chip { margin-left: auto; }
+.lesson-title .next-chip, .topic-name .next-chip { margin-left: 0; }
+
 /* Index: themes, and inside each theme a row per topic. Deliberately no lesson
    rows here — that is the topic page's job — so the page stays scannable. */
 .themes { display: grid; gap: 16px; margin-top: 18px; }
@@ -302,6 +334,8 @@ textarea.editor::placeholder {
   padding: 3px 8px; background: var(--surface-2);
   font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
+.goal-name { font-weight: 600; }
+.goal-index { opacity: .75; }
 .goal-hyps { padding: 6px 8px 0; font-family: var(--mono); font-size: 12.5px; }
 .goal-hyps .hyp { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .goal-hyps.empty { padding-bottom: 6px; color: var(--muted); font-style: italic; }

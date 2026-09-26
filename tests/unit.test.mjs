@@ -2,6 +2,9 @@
 //   node --test tests/unit.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   LESSONS, SANDBOX, THEMES, THEMES_AVAILABLE, THEMES_PLANNED, TOPICS, lessonById, lessonIndex,
@@ -23,6 +26,40 @@ const tacticLesson = {
   statement: 'example (n : Nat) : n = n',
   context: 'def double (n : Nat) := 2 * n',
 };
+
+// Regression guard: a stylesheet block was once deleted while the markup that
+// used it stayed, and topic pages silently lost their lesson-row cards. Every
+// class the app renders must therefore exist in the stylesheet, unless it is a
+// deliberate hook with no visual role.
+const STYLE_HOOKS = new Set(['next-step', 'theme']);
+
+test('every class the app renders is styled, or a documented hook', () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const site = join(root, 'site');
+  const sources = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (entry.endsWith('.js')) sources.push(readFileSync(full, 'utf8'));
+    }
+  };
+  walk(join(site, 'src'));
+  for (const page of ['index.html', '404.html']) sources.push(readFileSync(join(site, page), 'utf8'));
+
+  const used = new Set();
+  for (const text of sources) {
+    for (const match of text.matchAll(/class(?:Name)?[:=]\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)/g)) {
+      const raw = (match[1] ?? match[2] ?? match[3] ?? '').replace(/\$\{[^}]*\}/g, ' ');
+      for (const token of raw.split(/\s+/)) if (token) used.add(token);
+    }
+  }
+  const css = readFileSync(join(site, 'assets', 'app.css'), 'utf8');
+  const defined = new Set([...css.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
+  const missing = [...used].filter((token) => !defined.has(token) && !STYLE_HOOKS.has(token)).sort();
+  assert.deepEqual(missing, [], `these classes are rendered but never styled: ${missing.join(', ')}`);
+  assert.ok(used.size > 60, 'the scan should find the app’s classes');
+});
 
 test('the content satisfies its own contract', () => {
   assert.deepEqual(validateContent(), []);
