@@ -4,6 +4,9 @@
 
 **Live: <https://lean-tutorials.pages.dev>** — Cloudflare Pages project `lean-tutorials`.
 
+Working on this repo as an agent? **[AGENTS.md](AGENTS.md)** is the operating manual:
+commands, the release workflow, what CI enforces, and the traps.
+
 Short, interactive Lean 4 tutorials where **the real Lean kernel checks your proof
 on your own device**. No proof server, no account, nothing you type is sent
 anywhere: Lean 4 is compiled to WebAssembly and runs in a Web Worker in the
