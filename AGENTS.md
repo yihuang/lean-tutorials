@@ -173,6 +173,17 @@ dist/lean-wasm/            production: lean.wasm split into lean.wasm.part-NNN
 - **Worktrees and symlinks.** Worktrees symlink `.runtime-cache`, `site/lean-wasm` and
   `.env`; they are ignored via `.git/info/exclude`. Never `git add -A` there — commit
   explicit paths.
+- **Unfolding a lesson's own `context` definition poisons the runtime.** Every tactic
+  lesson is compiled twice (the plain pass and the goal-tracing pass), and this runtime
+  cannot unfold a `def` that the *same* compile declares: the second compile returns
+  `lean_wasm_compile returned an IO error (tag != 0)` and every later compile in that
+  worker fails the same way. So do not write `simp [d]`, `grind [d]`, `rw [d]` or (for a
+  recursive `d`) `unfold d` against a name from `context`. Safe alternatives: prove by
+  `rfl`/defeq, rewrite with the function's equational lemmas or `@[simp]` helper theorems
+  declared in the same `context`, use `unfold d` only for a non-recursive `def`, or
+  declare a non-recursive `context` helper as `abbrev` (then `simp [d]` is fine). The
+  browser suite runs every lesson in one worker, so a lesson that triggers this is
+  reported as a cascade of `runtime: Lean could not finish` failures after it.
 - **The goal-trace protocol has one owner** (`site/src/lean/goals.js`): Lean merges traces
   that share a source position (`marker\nmarker` then one message holding both goal
   states), which once made an open proof report as complete. Do not re-implement the

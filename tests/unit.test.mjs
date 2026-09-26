@@ -130,11 +130,14 @@ test('theme accessors and progress', () => {
 
   const nothing = () => false;
   const none = themeProgress(theme, nothing);
-  assert.deepEqual(none, { solved: 0, total: LESSONS.length, topicsSolved: 0, topics: TOPICS.length, complete: false });
+  // Scoped to the theme: with more than one available theme the global totals are
+  // larger than any single theme's.
+  const ownLessons = theme.topics.flatMap((id) => topicById(id).lessons);
+  assert.deepEqual(none, { solved: 0, total: ownLessons.length, topicsSolved: 0, topics: theme.topics.length, complete: false });
   const everything = (id) => Boolean(lessonById(id));
   const all = themeProgress(theme, everything);
   assert.equal(all.complete, true);
-  assert.equal(all.topicsSolved, TOPICS.length);
+  assert.equal(all.topicsSolved, theme.topics.length);
 
   // Theme → topic → lesson order drives "what next".
   assert.equal(nextUnsolvedLesson(nothing).id, LESSONS[0].id);

@@ -35,16 +35,25 @@ import { quantifiers } from './topics/quantifiers.js';
 import { numbers } from './topics/numbers.js';
 import { rewriting } from './topics/rewriting.js';
 import { automation } from './topics/automation.js';
+import { advancedTactics } from './topics/advanced-tactics.js';
 import { tools } from './topics/tools.js';
+import { specifications } from './topics/specifications.js';
+import { loopInvariants } from './topics/loop-invariants.js';
+import { termination } from './topics/termination.js';
+import { refinement } from './topics/refinement.js';
 import { proofBasics } from './themes/proof-basics.js';
+import { programVerification } from './themes/program-verification.js';
 import {
-  dataStructures, functionalProgramming, maths, metaprogramming, programVerification,
+  dataStructures, functionalProgramming, maths, metaprogramming,
 } from './themes/planned.js';
 
 /** Order matters: it is the reading order and the "next lesson" order. */
-export const TOPICS = [foundations, logic, quantifiers, numbers, rewriting, automation, tools];
+export const TOPICS = [
+  foundations, logic, quantifiers, numbers, rewriting, automation, advancedTactics, tools,
+  specifications, loopInvariants, termination, refinement,
+];
 
-/** Themes in reading order: the one that exists first, then the roadmap. */
+/** Themes in reading order: the ones with material first, then the roadmap. */
 export const THEMES = [proofBasics, programVerification, functionalProgramming, dataStructures, maths, metaprogramming];
 
 const byLessonId = new Map();
