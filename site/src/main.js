@@ -9,8 +9,9 @@ import { GoalProbe } from './lean/infoview.js';
 import { checkLesson } from './lean/tutorial.js';
 import { locate, parseOutput } from './lean/diagnostics.js';
 import {
-  LESSONS, SANDBOX, TOPICS, lessonById, lessonPositionInTopic, nextLesson, nextUnsolvedLesson,
-  previousLesson, topicById, topicOfLesson, topicProgress, totalProgress,
+  LESSONS, SANDBOX, THEMES, THEMES_AVAILABLE, THEMES_PLANNED, TOPICS, lessonById,
+  lessonPositionInTopic, nextLesson, nextUnsolvedLesson, previousLesson, themeOfTopic, themeProgress,
+  topicById, topicOfLesson, topicProgress, totalProgress,
 } from './content/index.js';
 import { createEditor } from './ui/editor.js';
 import { createInfoviewPanel } from './ui/infoview-panel.js';
@@ -170,50 +171,87 @@ function lessonRow(lesson, number, nextId) {
 
 // -------------------------------------------------------------------- home
 
+/** A topic row: number, title, one-line summary, progress. No lesson rows here —
+ *  lessons live on the topic page, which is what keeps this page scannable. */
+function topicRow(topic, number, nextTopicId) {
+  const progress = topicProgress(topic, isSolved);
+  const percent = progress.total === 0 ? 0 : Math.round((progress.solved / progress.total) * 100);
+  return h('li', {
+    class: 'topic-row',
+    dataset: { solved: progress.complete ? 'true' : 'false', next: topic.id === nextTopicId ? 'true' : 'false' },
+  }, h('a', { href: topicHref(topic.id) },
+    h('span', { class: 'topic-index', text: String(number) }),
+    h('span', { class: 'topic-text' },
+      h('span', { class: 'topic-name' },
+        h('span', { text: topic.title }),
+        progress.complete ? h('span', { class: 'topic-done', text: '✓' }) : null,
+        topic.id === nextTopicId && !progress.complete ? h('span', { class: 'next-chip', text: 'next' }) : null),
+      h('span', { class: 'topic-desc', text: topic.summary })),
+    h('span', { class: 'topic-meter' },
+      h('span', { class: 'topic-count', text: `${progress.solved}/${progress.total}` }),
+      h('span', { class: 'topic-bar', 'aria-hidden': 'true' }, h('i', { style: `width: ${percent}%` })))));
+}
+
+function themeSection(theme) {
+  const progress = themeProgress(theme, isSolved);
+  const nextTopic = theme.topics.find((id) => !topicProgress(topicById(id), isSolved).complete) ?? null;
+  const index = THEMES_AVAILABLE.indexOf(theme) + 1;
+  const firstTopicIndex = TOPICS.indexOf(topicById(theme.topics[0]));
+  return h('section', { class: 'theme', dataset: { complete: progress.complete ? 'true' : 'false' } },
+    h('div', { class: 'theme-head' },
+      h('h2', { class: 'theme-title' }, h('span', { class: 'theme-num', text: String(index) }), theme.title),
+      h('span', { class: 'theme-progress', text: `${progress.topicsSolved}/${progress.topics} topics` })),
+    h('p', { class: 'theme-summary', text: theme.summary }),
+    h('ol', { class: 'topic-list' }, theme.topics.map((id, offset) => topicRow(topicById(id), firstTopicIndex + offset + 1, nextTopic))));
+}
+
+function plannedSection(theme) {
+  return h('section', { class: 'theme planned', dataset: { status: 'planned' } },
+    h('div', { class: 'theme-head' },
+      h('h2', { class: 'theme-title' }, theme.title),
+      h('span', { class: 'planned-chip', text: 'planned' })),
+    h('p', { class: 'theme-summary', text: theme.summary }),
+    h('p', { class: 'planned-line' }, theme.planned.map((entry, index) => [
+      index > 0 ? h('span', { class: 'planned-sep', text: ' · ' }) : null,
+      h('span', { class: 'planned-topic', title: entry.summary, text: entry.title }),
+    ])));
+}
+
 function renderHome() {
   const overall = totalProgress(isSolved);
   const nextUp = nextUnsolvedLesson(isSolved);
+  const percent = overall.total === 0 ? 0 : Math.round((overall.solved / overall.total) * 100);
 
   main.append(
-    h('h1', { text: 'Proofs, checked on your own device' }),
+    h('h1', { text: 'Learn Lean in the browser' }),
     h('p', {}, inlineProse(
-      'Short Lean 4 tutorials in seven topics. The real Lean compiler runs locally in WebAssembly — ' +
+      'Short, interactive Lean 4 tutorials. The real Lean compiler runs locally in WebAssembly — ' +
       'your browser checks every proof, nothing is sent to a server, and it works on a phone.')),
-    h('p', { class: 'small muted', text:
-      `${overall.solved} of ${overall.total} lessons done · ` +
-      `${TOPICS.filter((topic) => topicProgress(topic, isSolved).complete).length} of ${TOPICS.length} topics finished · ` +
-      `${engine.state === 'ready' ? 'Lean is ready, checks are instant' : 'Lean is still warming up in the background'}` }),
+    h('div', { class: 'overall' },
+      h('div', { class: 'overall-row' },
+        h('span', { class: 'overall-count', text: `${overall.solved} of ${overall.total} lessons` }),
+        h('span', { class: 'overall-hint', text: nextUp ? 'next up' : 'all done' })),
+      h('span', { class: 'overall-bar', 'aria-hidden': 'true' }, h('i', { style: `width: ${percent}%` }))),
     nextUp
-      ? h('p', {}, inlineProse(`Next up: **${nextUp.title}** — `), h('a', { href: lessonHref(nextUp.id), text: 'continue →' }))
-      : h('p', {}, inlineProse('All lessons done. Try the [sandbox](#/sandbox) with your own statements.')),
+      ? h('p', { class: 'cta-row' }, h('a', {
+        class: 'btn primary', href: lessonHref(nextUp.id),
+        text: `${overall.solved === 0 ? 'Start' : 'Continue'}: ${nextUp.title} →`,
+      }))
+      : h('p', { class: 'cta-row' }, h('a', { class: 'btn primary', href: '#/sandbox', text: 'Try the sandbox →' })),
   );
 
-  const list = h('ol', { class: 'topic-list' });
-  TOPICS.forEach((topic, index) => {
-    const progress = topicProgress(topic, isSolved);
-    const next = topic.lessons.find((lesson) => !isSolved(lesson.id));
-    list.append(h('li', { class: 'topic-card', dataset: { complete: progress.complete ? 'true' : 'false' } },
-      h('a', { class: 'topic-head', href: topicHref(topic.id) },
-        h('span', { class: 'lesson-num', text: String(index + 1) }),
-        h('span', { class: 'topic-meta' },
-          h('span', { class: 'topic-title', text: topic.title }),
-          h('span', { class: 'topic-sub', text: topic.summary })),
-        h('span', { class: 'topic-side' },
-          pips(topic),
-          h('span', { class: 'topic-count', text: `${progress.solved}/${progress.total}` }))),
-      h('p', { class: 'topic-next small muted' },
-        next
-          ? [inlineProse('Next: '), h('a', { href: lessonHref(next.id), text: next.title })]
-          : inlineProse(`All ${progress.total} lessons done.`))));
-  });
-  main.append(list);
+  main.append(h('div', { class: 'themes' }, THEMES_AVAILABLE.map(themeSection)));
+  if (THEMES_PLANNED.length > 0) {
+    main.append(h('div', { class: 'themes planned-list' },
+      h('p', { class: 'eyebrow', style: 'margin-top:18px', text: 'On the roadmap' }),
+      THEMES_PLANNED.map(plannedSection)));
+  }
 
-  main.append(h('div', { class: 'card', style: 'margin-top:16px' },
-    h('p', { class: 'eyebrow', text: 'Free play' }),
-    h('p', {}, inlineProse('A blank Lean file with `#check`, `#eval` and definitions — the same engine, no task.')),
-    h('a', { class: 'btn', href: '#/sandbox', style: 'display:inline-block;text-decoration:none;line-height:44px', text: 'Open the sandbox' })));
+  main.append(h('p', { class: 'sandbox-row small muted' },
+    h('span', { text: 'Free play: a blank Lean file with `#check`, `#eval` and definitions. ' }),
+    h('a', { href: '#/sandbox', text: 'Open the sandbox →' })));
 
-  main.append(h('details', { class: 'hint', style: 'margin-top:16px' },
+  main.append(h('details', { class: 'hint', style: 'margin-top:12px' },
     h('summary', { text: 'How does this work, and why does it need 47 MB?' }),
     h('div', { class: 'body' },
       h('p', {}, inlineProse(
@@ -238,7 +276,9 @@ function renderTopic(topic) {
   const remaining = topic.lessons.length - progress.solved;
 
   main.append(
-    h('p', { class: 'eyebrow' }, h('a', { href: '#/', text: 'All topics' }), ` · topic ${index + 1} of ${TOPICS.length}`),
+    h('p', { class: 'eyebrow' },
+      h('a', { href: '#/', text: 'All topics' }),
+      ` · ${themeOfTopic(topic.id)?.title ?? 'topic'} · ${index + 1} of ${TOPICS.length}`),
     h('h1', { text: topic.title }),
   );
   main.append(prose(topic.intro));
@@ -271,6 +311,7 @@ function renderLesson(lesson) {
 
   main.append(
     h('p', { class: 'eyebrow' },
+      `${themeOfTopic(topic.id)?.title ?? ''} · `,
       h('a', { href: topicHref(topic.id), text: topic.title }),
       ` · lesson ${position.index + 1} of ${position.count} · `,
       h('code', { text: lesson.focus })),

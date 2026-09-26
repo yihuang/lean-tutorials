@@ -333,6 +333,25 @@ try {
   if (!requireOk) failures += 1;
   console.log(`${requireOk ? '✓' : '✗'} required source: ${requireRule.headline} — ${requireRule.message}`);
 
+  // The index must show the broad structure — themes, topic rows, and the
+  // roadmap — since CI runs this suite against the deployed site too.
+  await page.evaluate(() => { location.hash = '#/'; });
+  await page.waitForSelector('.theme');
+  const index = await page.evaluate(() => ({
+    available: document.querySelectorAll('section.theme:not([data-status="planned"])').length,
+    planned: document.querySelectorAll('section.theme[data-status="planned"]').length,
+    topics: document.querySelectorAll('.topic-row a').length,
+    lessonRows: document.querySelectorAll('li.lesson-item').length,
+    plannedTopics: document.querySelectorAll('.planned-topic').length,
+    plannedLinks: [...document.querySelectorAll('.planned-topic')].filter((node) => node.closest('a')).length,
+    cta: document.querySelector('.cta-row a')?.textContent?.trim() ?? '',
+    themes: [...document.querySelectorAll('section.theme:not([data-status="planned"]) .theme-title')].map((node) => node.textContent.replace(/^\d+/, '').trim()),
+  }));
+  const indexOk = index.available >= 1 && index.planned >= 2 && index.topics >= 5 && index.lessonRows === 0
+    && index.plannedTopics >= 6 && index.plannedLinks === 0 && /^(Start|Continue):/.test(index.cta);
+  if (!indexOk) failures += 1;
+  console.log(`${indexOk ? '✓' : '✗'} index: ${JSON.stringify(index)}`);
+
   // A blocked or rewritten runtime must produce an actionable error, not a wasm
   // "expected magic word" crash. This is exactly what CI hit when Cloudflare
   // challenged the runner's datacenter IP for the pinned wasm.

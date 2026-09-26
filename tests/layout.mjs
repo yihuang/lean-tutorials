@@ -52,21 +52,38 @@ const overflow = async (label, target = page) => {
 };
 
 await overflow('home');
-const topics = await page.evaluate(() => {
-  const cards = [...document.querySelectorAll('li.topic-card')];
-  const first = cards[0]?.querySelector('a.topic-head');
+const index = await page.evaluate(() => {
+  const themes = [...document.querySelectorAll('section.theme')];
+  const available = themes.filter((theme) => theme.dataset.status !== 'planned');
+  const planned = themes.filter((theme) => theme.dataset.status === 'planned');
+  const rows = [...document.querySelectorAll('.topic-row a')];
   return {
-    count: cards.length,
-    titles: cards.map((card) => card.querySelector('.topic-title')?.textContent ?? ''),
-    pips: cards.map((card) => card.querySelectorAll('.pip').length),
-    counts: cards.map((card) => card.querySelector('.topic-count')?.textContent ?? ''),
-    tapHeight: first ? Math.round(first.getBoundingClientRect().height) : 0,
+    themes: themes.length,
+    available: available.length,
+    planned: planned.length,
+    availableTitles: available.map((theme) => theme.querySelector('.theme-title')?.textContent?.replace(/^\d+/, '').trim() ?? ''),
+    topics: rows.length,
+    lessonRows: document.querySelectorAll('li.lesson-item').length,
+    withProgress: rows.filter((row) => /^\d+\/\d+$/.test(row.querySelector('.topic-count')?.textContent ?? '')).length,
+    withBar: rows.filter((row) => row.querySelector('.topic-bar > i') !== null).length,
+    tapHeight: rows[0] ? Math.round(rows[0].getBoundingClientRect().height) : 0,
+    cta: document.querySelector('.cta-row a')?.textContent?.trim() ?? '',
+    plannedTopics: document.querySelectorAll('.planned-topic').length,
+    plannedLinks: [...document.querySelectorAll('.planned-topic')].filter((node) => node.closest('a')).length,
+    plannedChips: document.querySelectorAll('.planned-chip').length,
   };
 });
-check(topics.count >= 5, 'home: topic cards rendered', topics.titles.join(', '));
-check(topics.pips.every((count) => count >= 3), 'home: each topic shows a pip per lesson', JSON.stringify(topics.pips));
-check(topics.counts.every((text) => /^\d+\/\d+$/.test(text)), 'home: topic progress is shown', topics.counts.join(' '));
-check(topics.tapHeight >= 44, 'home: topic headers are tappable', `${topics.tapHeight}px`);
+check(index.themes >= 2 && index.available >= 1 && index.planned >= 2, 'index: themes, with the roadmap separate',
+  `${index.available} available + ${index.planned} planned (${index.availableTitles.join(', ')})`);
+check(index.topics >= 5 && index.withProgress === index.topics && index.withBar === index.topics,
+  'index: every topic row shows progress', `${index.topics} rows`);
+// The whole point of the redesign: topics, not lessons, on the index.
+check(index.lessonRows === 0, 'index: no lesson rows (lessons live on the topic page)', `${index.lessonRows} found`);
+check(index.tapHeight >= 44, 'index: topic rows are tappable', `${index.tapHeight}px`);
+check(/^(Start|Continue):/.test(index.cta), 'index: a single next-step call to action', index.cta);
+check(index.plannedTopics >= 6 && index.plannedLinks === 0 && index.plannedChips >= 2,
+  'index: roadmap entries are announced but not clickable',
+  `${index.plannedTopics} planned topics, ${index.plannedLinks} inside links, ${index.plannedChips} chips`);
 
 // Topic page: the topic's own lessons, and the way back to all topics.
 await page.evaluate(() => { location.hash = '#/topic/logic'; });

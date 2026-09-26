@@ -4,8 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  LESSONS, SANDBOX, TOPICS, lessonById, lessonIndex, lessonPositionInTopic, nextLesson,
-  nextUnsolvedLesson, previousLesson, topicById, topicOfLesson, topicProgress, totalProgress,
+  LESSONS, SANDBOX, THEMES, THEMES_AVAILABLE, THEMES_PLANNED, TOPICS, lessonById, lessonIndex,
+  lessonPositionInTopic, nextLesson, nextUnsolvedLesson, previousLesson, themeById, themeOfLesson,
+  themeOfTopic, themeProgress, topicById, topicOfLesson, topicProgress, totalProgress,
   validateContent,
 } from '../site/src/content/index.js';
 import {
@@ -52,6 +53,80 @@ test('validateContent actually catches broken content', () => {
   assert.match(joined, /needs a statement starting with example\/theorem/);
   assert.match(joined, /file lesson must not have a statement/);
   assert.match(joined, /unknown kind "weird"/);
+});
+
+test('the theme layer groups every topic exactly once', () => {
+  assert.deepEqual(validateContent(), []);
+  assert.ok(THEMES_AVAILABLE.length >= 1, 'at least one theme with material');
+  assert.ok(THEMES_PLANNED.length >= 2, 'a roadmap of planned themes');
+  assert.equal(THEMES.length, THEMES_AVAILABLE.length + THEMES_PLANNED.length);
+  assert.equal(new Set(THEMES.map((theme) => theme.id)).size, THEMES.length);
+
+  for (const theme of THEMES) {
+    if (theme.status === 'available') {
+      assert.ok(theme.topics.length > 0, `${theme.id} needs topics`);
+      for (const id of theme.topics) assert.ok(topicById(id), `${theme.id} references unknown topic ${id}`);
+    } else {
+      assert.equal(theme.topics.length, 0, `${theme.id} is planned, so it must not own topics`);
+      assert.ok(theme.planned.length > 0, `${theme.id} needs planned topics`);
+    }
+    for (const entry of theme.planned) {
+      assert.ok(entry.title && entry.summary, `${theme.id}/${entry.id} needs a title and summary`);
+    }
+  }
+
+  // No orphan topics: everything is reachable from exactly one available theme.
+  for (const topic of TOPICS) {
+    const owners = THEMES.filter((theme) => theme.topics.includes(topic.id));
+    assert.equal(owners.length, 1, `${topic.id} must be owned by exactly one theme`);
+    assert.equal(owners[0].status, 'available');
+  }
+});
+
+test('theme accessors and progress', () => {
+  const theme = THEMES_AVAILABLE[0];
+  assert.equal(themeById(theme.id), theme);
+  assert.equal(themeOfTopic(TOPICS[0].id).id, theme.id);
+  assert.equal(themeOfLesson(LESSONS[0].id).id, theme.id);
+  assert.equal(themeOfTopic('nope'), null);
+  assert.equal(themeOfLesson('nope'), null);
+
+  const nothing = () => false;
+  const none = themeProgress(theme, nothing);
+  assert.deepEqual(none, { solved: 0, total: LESSONS.length, topicsSolved: 0, topics: TOPICS.length, complete: false });
+  const everything = (id) => Boolean(lessonById(id));
+  const all = themeProgress(theme, everything);
+  assert.equal(all.complete, true);
+  assert.equal(all.topicsSolved, TOPICS.length);
+
+  // Theme → topic → lesson order drives "what next".
+  assert.equal(nextUnsolvedLesson(nothing).id, LESSONS[0].id);
+  assert.equal(nextUnsolvedLesson(everything), null);
+  const onlyFirstTopicDone = (id) => TOPICS[0].lessons.some((lesson) => lesson.id === id);
+  assert.equal(nextUnsolvedLesson(onlyFirstTopicDone).id, TOPICS[1].lessons[0].id);
+  assert.equal(themeProgress(theme, onlyFirstTopicDone).topicsSolved, 1);
+});
+
+test('validateContent catches a broken theme layer', () => {
+  const problems = validateContent({
+    themes: [
+      { id: 'Bad Theme', status: 'available', title: 't', summary: 's', intro: 'i', topics: ['foundations', 'missing-topic'], planned: [] },
+      { id: 'no-topics', status: 'available', title: 't', summary: 's', intro: 'i', topics: [], planned: [] },
+      { id: 'also-claims', status: 'available', title: 't', summary: 's', intro: 'i', topics: ['foundations'], planned: [] },
+      { id: 'dup', status: 'planned', title: 't', summary: 's', intro: 'i', topics: [], planned: [] },
+      { id: 'dup', status: 'planned', title: 't', summary: 's', intro: 'i', topics: ['foundations'], planned: [{ id: 'x', title: 'x', summary: 's' }] },
+    ],
+  });
+  const joined = problems.join('\n');
+  assert.match(joined, /theme Bad Theme: id must be kebab-case/);
+  assert.match(joined, /references unknown topic "missing-topic"/);
+  assert.match(joined, /an available theme needs at least one topic/);
+  assert.match(joined, /duplicate theme id/);
+  assert.match(joined, /a planned theme must not own topics yet/);
+  assert.match(joined, /a planned theme needs at least one planned topic/);
+  assert.match(joined, /claimed by both/);
+  // The real topics are not claimed by this fixture, so they must be reported.
+  assert.match(joined, /topic "logic" is not listed by any theme/);
 });
 
 test('content accessors follow topic order', () => {

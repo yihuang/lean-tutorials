@@ -10,7 +10,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { LESSONS, validateContent } from '../site/src/content/index.js';
+import { LESSONS, THEMES, validateContent } from '../site/src/content/index.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const src = join(root, 'site', 'src');
@@ -39,7 +39,7 @@ test('the mechanism reaches content only through content/index.js', () => {
   const mechanism = ['lean/engine.js', 'lean/tutorial.js', 'lean/source.js', 'lean/packs.js', 'lean/diagnostics.js', 'lean/goals.js', 'lean/infoview.js', 'ui/editor.js', 'ui/dom.js', 'ui/prose.js', 'ui/infoview-panel.js', 'main.js'];
   for (const name of mechanism) {
     const file = join(src, name);
-    const bad = importsOf(file).filter((spec) => /content\/topics\//.test(spec) || /content\/sandbox/.test(spec));
+    const bad = importsOf(file).filter((spec) => /content\/topics\//.test(spec) || /content\/themes\//.test(spec) || /content\/sandbox/.test(spec));
     assert.deepEqual(bad, [], `${name} must not import topic modules directly (${bad.join(', ')})`);
   }
 });
@@ -71,6 +71,25 @@ test('every topic module exports exactly one topic of lessons', async () => {
     assert.match(name, new RegExp(`^${topic.id}\\.js$`), `${name} should be named after its topic id`);
     assert.ok(topic.lessons.length >= 3, `${name} should carry at least three lessons`);
   }
+});
+
+test('theme modules export well-formed themes', async () => {
+  const files = readdirSync(join(src, 'content', 'themes')).filter((name) => name.endsWith('.js'));
+  assert.ok(files.length >= 2, 'expected several theme modules');
+  let count = 0;
+  for (const name of files) {
+    const module = await import(`../site/src/content/themes/${name}`);
+    const themes = Object.values(module).filter((value) => value && typeof value === 'object'
+      && Array.isArray(value.topics) && typeof value.status === 'string');
+    assert.ok(themes.length >= 1, `${name} should export at least one theme`);
+    for (const theme of themes) {
+      count += 1;
+      assert.ok(theme.id && theme.title && theme.intro && theme.summary, `${name}: ${theme.id} is incomplete`);
+      assert.ok(['available', 'planned'].includes(theme.status), `${name}: ${theme.id} has status ${theme.status}`);
+      if (theme.status === 'planned') assert.equal(theme.topics.length, 0, `${name}: planned themes own no topics`);
+    }
+  }
+  assert.equal(count, THEMES.length, 'every theme comes from a themes/ module');
 });
 
 test('the contract validates the real content', () => {

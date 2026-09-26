@@ -139,59 +139,73 @@ p { margin: 0 0 12px; }
 
 .lesson-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
 
-/* Topic overview: one compact card per topic, progress as pips. */
-.topic-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
-.topic-card {
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
-}
-.topic-card[data-complete="true"] { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
-.topic-head {
-  display: flex; align-items: center; gap: 12px;
-  padding: 13px 14px; min-height: 62px;
-  text-decoration: none; color: var(--text);
-}
-.topic-card[data-complete="true"] .lesson-num { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
-.topic-meta { min-width: 0; flex: 1; }
-.topic-title { display: block; font-weight: 600; font-size: 15px; }
-.topic-sub { display: block; font-size: 13px; color: var(--muted); }
-.topic-side { display: flex; align-items: center; gap: 10px; flex: none; }
-.topic-count { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.pips { display: inline-flex; gap: 3px; }
-.pip { width: 7px; height: 7px; border-radius: 50%; background: var(--line); display: block; }
-.pip[data-state="solved"] { background: var(--ok); }
-.pip[data-state="next"] { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.topic-next { margin: 0; padding: 0 14px 12px; }
-@media (max-width: 420px) { .pips { display: none; } }
+/* Index: themes, and inside each theme a row per topic. Deliberately no lesson
+   rows here — that is the topic page's job — so the page stays scannable. */
+.themes { display: grid; gap: 16px; margin-top: 18px; }
 
-.lesson-item a {
-  display: flex; align-items: center; gap: 12px;
-  padding: 13px 14px; min-height: 62px;
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); text-decoration: none; color: var(--text);
-  box-shadow: var(--shadow);
+.theme-head { display: flex; align-items: baseline; gap: 10px; }
+.theme-title {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0; font-size: 15px; letter-spacing: -.01em;
 }
-.lesson-item a:active { transform: scale(.995); }
-.lesson-num {
-  flex: none; width: 30px; height: 30px; border-radius: 50%;
-  display: grid; place-items: center;
-  border: 1px solid var(--line); background: var(--surface-2);
-  font-family: var(--mono); font-size: 13px; color: var(--muted);
+.theme-num {
+  display: grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
 }
-.lesson-item[data-solved="true"] .lesson-num { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
-
-/* The path onward: the next unsolved lesson is the only accented row. */
-.lesson-item[data-next="true"] a { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
-.next-chip {
+.theme-progress, .planned-chip {
   margin-left: auto; flex: none;
-  font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--accent); background: var(--accent-soft);
-  border-radius: 999px; padding: 3px 9px;
+  font-size: 11.5px; font-weight: 650; color: var(--muted); white-space: nowrap;
 }
-.lesson-meta { min-width: 0; }
-.lesson-title { font-weight: 600; font-size: 15px; }
-.lesson-sub { font-size: 13px; color: var(--muted); }
-.lesson-tick { margin-left: auto; color: var(--ok); font-size: 18px; }
+.planned-chip {
+  text-transform: uppercase; letter-spacing: .06em;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px 8px;
+}
+.theme-summary { margin: 4px 0 8px; font-size: 13px; color: var(--muted); }
+
+.topic-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.topic-row a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; min-height: 52px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 11px; text-decoration: none; color: var(--text);
+}
+.topic-row[data-next="true"] a { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.topic-index {
+  flex: none; width: 22px; font-family: var(--mono);
+  font-size: 12px; color: var(--muted); text-align: right;
+}
+.topic-text { flex: 1 1 auto; min-width: 0; }
+.topic-name { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 14.5px; }
+.topic-done { color: var(--ok); font-size: 13px; }
+.topic-desc { display: block; font-size: 12.5px; color: var(--muted); }
+.topic-meter { flex: none; display: flex; align-items: center; gap: 8px; }
+.topic-count { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.topic-bar, .overall-bar {
+  display: block; width: 54px; height: 4px; border-radius: 99px;
+  background: var(--surface-2); overflow: hidden;
+}
+.topic-bar > i, .overall-bar > i { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
+.topic-row[data-next="true"] .topic-bar > i { background: var(--accent); }
+
+/* Roadmap: announced, clearly not yet written. Never links, never progress. */
+.planned { opacity: .92; }
+.planned-line { margin: 0; font-size: 12.5px; color: var(--muted); }
+.planned-topic { border-bottom: 1px dotted var(--line); }
+.planned-sep { color: var(--line); }
+
+/* Hero progress + the single call to action. */
+.overall { margin: 12px 0 10px; }
+.overall-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.overall-count { font-size: 13px; font-weight: 600; }
+.overall-hint { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.overall-bar { width: 100%; height: 5px; }
+.cta-row { margin: 0 0 4px; }
+.cta-row .btn { width: 100%; }
+@media (min-width: 640px) { .cta-row .btn { width: auto; min-width: 260px; } }
+.sandbox-row { margin: 18px 0 0; }
+
 
 /* ----------------------------------------------------------------- editor */
 

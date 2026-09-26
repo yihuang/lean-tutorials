@@ -68,6 +68,17 @@ const CONTRAST = `
     '<div class="result ok"><span class="check">✓</span><span><strong class="result-title">Proof verified</strong>' +
       '<span class="result-detail">kernel-checked</span></span></div>',
     '<span class="next-chip">next</span>',
+    '<section class="theme"><div class="theme-head"><h2 class="theme-title"><span class="theme-num">1</span>Theme</h2>' +
+      '<span class="theme-progress">0/7 topics</span></div><p class="theme-summary">summary</p>' +
+      '<ol class="topic-list"><li class="topic-row"><a href="#/"><span class="topic-index">1</span>' +
+      '<span class="topic-text"><span class="topic-name">Topic</span><span class="topic-desc">description</span></span>' +
+      '<span class="topic-meter"><span class="topic-count">1/4</span><span class="topic-bar"><i></i></span></span></a></li></ol></section>',
+    '<section class="theme planned" data-status="planned"><div class="theme-head"><h2 class="theme-title">Roadmap</h2>' +
+      '<span class="planned-chip">planned</span></div><p class="planned-line">' +
+      '<span class="planned-topic">Specifications</span><span class="planned-sep"> · </span>' +
+      '<span class="planned-topic">Loop invariants</span></p></section>',
+    '<div class="overall"><div class="overall-row"><span class="overall-count">2 of 31 lessons</span>' +
+      '<span class="overall-hint">next up</span></div><span class="overall-bar"><i></i></span></div>',
     '<section class="infoview" data-state="goals"><div class="infoview-head">' +
       '<span class="infoview-state"><span class="infoview-title">Goals at line 3</span>' +
       '<span class="infoview-badge">2 open</span></span></div><div class="infoview-body">' +
@@ -75,9 +86,6 @@ const CONTRAST = `
       '<span class="goal-index">1/2</span></div><div class="goal-hyps"><span class="hyp">hp : p</span></div>' +
       '<div class="goal-target"><span class="turnstile">⊢</span> p</div></div>' +
       '<p class="infoview-note">showing the last complete step</p></div></section>',
-    '<div class="topic-card"><a class="topic-head" href="#/"><span class="topic-meta">' +
-      '<span class="topic-title">Topic title</span><span class="topic-sub">topic summary</span></span>' +
-      '<span class="topic-count">2/5</span></a><p class="topic-next small muted">Next: <a href="#/">lesson</a></p></div>',
   ].join('');
   document.body.append(injected);
   for (const raw of ${JSON.stringify([
@@ -85,8 +93,9 @@ const CONTRAST = `
     '.btn.primary', '.banner.ok', '.banner.err', '.banner.info', '.footer p', '.chip',
     '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
     '.result.ok .result-title', '.result.ok .result-detail', '.next-chip',
-    '.topic-title', '.topic-sub', '.topic-count', '.topic-next a',
     '.infoview-title', '.infoview-badge', '.goal-hyps .hyp', '.goal-target', '.goal-name', '.infoview-note',
+    '.theme-title', '.theme-summary', '.theme-progress', '.planned-chip', '.planned-line', '.planned-topic',
+    '.topic-name', '.topic-desc', '.topic-count', '.overall-count', '.overall-hint', '.sandbox-row',
   ])}) {
     const [selector, pseudo] = raw.split('::');
     const element = document.querySelector(selector);

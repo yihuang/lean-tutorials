@@ -312,12 +312,23 @@ pressing Check.
 
 ## Course structure: content vs mechanism
 
-The course is **31 lessons in 7 topics**, and the split between material and
-machinery is enforced rather than promised:
+The course is **themes → topics → lessons**. Today that is one theme with material
+(**Proof basics**: 31 lessons in 7 topics) plus **five announced themes** —
+program verification, functional programming, data structures and algorithms,
+doing maths in Lean, and tactics/metaprogramming — each with its planned topics
+listed as data. The roadmap is content, so it lives in the same contract.
+
+```
+theme (broad area; owns topics)  →  topic (owns lessons)  →  lesson
+```
+
+The split between material and machinery is enforced rather than promised:
 
 ```
 site/src/content/            data only — no imports from lean/ or ui/
   index.js                   contract, aggregation, accessors, validateContent()
+  themes/proof-basics.js     a theme: the topics it owns (the material that exists)
+  themes/planned.js          the roadmap: themes that are announced, not written
   topics/foundations.js      one topic per module (id, title, intro, lessons)
   topics/logic.js
   topics/quantifiers.js
@@ -378,6 +389,18 @@ site/src/ui/, main.js        rendering, routing, progress
 `placeholder` is a grey prompt inside an otherwise **empty** editor (the HTML
 `placeholder` attribute), so a learner never has to select and delete filler text
 before typing.
+
+### Adding a theme, a planned topic, or a lesson
+
+- **A lesson** goes into a topic module (below).
+- **A topic** gets a module in `content/topics/` and its id added to a theme's
+  `topics` array.
+- **A planned topic** needs only `{ id, title, summary }` in a theme's `planned`
+  array — nothing renders as a link until real lessons exist.
+- **A theme** is a module in `content/themes/`: `{ id, status, title, summary,
+  intro, topics, planned }`, listed in `THEMES` so reading order is explicit.
+  `validateContent()` fails the build if a topic is claimed twice, claimed by
+  nobody, claimed by a planned theme, or if a planned topic collides with a real id.
 
 ### Workflow for adding material
 
