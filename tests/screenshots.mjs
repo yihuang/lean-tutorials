@@ -42,6 +42,21 @@ async function boot(width, height) {
 const phone = await boot(390, 844);
 await phone.screenshot({ path: join(out, 'mobile-home.png'), fullPage: true });
 
+// A topic page.
+await phone.evaluate(() => { location.hash = '#/topic/logic'; });
+await phone.waitForSelector('li.lesson-item');
+await phone.waitForTimeout(200);
+await phone.screenshot({ path: join(out, 'mobile-topic.png'), fullPage: true });
+
+// A whole-file lesson, with its output panel.
+await phone.evaluate(() => { location.hash = '#/lesson/check'; });
+await phone.waitForSelector('textarea.editor');
+await phone.fill('textarea.editor', '#check Nat.add_comm');
+await phone.click('.actions .btn.primary');
+await phone.waitForSelector('.result.ok');
+await phone.waitForTimeout(200);
+await phone.screenshot({ path: join(out, 'mobile-file-lesson.png'), fullPage: true });
+
 // A stuck learner: two open goals with their context.
 await phone.evaluate(() => { location.hash = '#/lesson/and'; });
 await phone.waitForSelector('textarea.editor');

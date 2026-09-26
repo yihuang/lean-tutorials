@@ -68,6 +68,9 @@ const CONTRAST = `
     '<div class="result ok"><span class="check">✓</span><span><strong class="result-title">Proof verified</strong>' +
       '<span class="result-detail">kernel-checked</span></span></div>',
     '<span class="next-chip">next</span>',
+    '<div class="topic-card"><a class="topic-head" href="#/"><span class="topic-meta">' +
+      '<span class="topic-title">Topic title</span><span class="topic-sub">topic summary</span></span>' +
+      '<span class="topic-count">2/5</span></a><p class="topic-next small muted">Next: <a href="#/">lesson</a></p></div>',
   ].join('');
   document.body.append(injected);
   for (const raw of ${JSON.stringify([
@@ -75,6 +78,7 @@ const CONTRAST = `
     '.btn.primary', '.banner.ok', '.banner.err', '.banner.info', '.footer p', '.chip',
     '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
     '.result.ok .result-title', '.result.ok .result-detail', '.next-chip',
+    '.topic-title', '.topic-sub', '.topic-count', '.topic-next a',
   ])}) {
     const [selector, pseudo] = raw.split('::');
     const element = document.querySelector(selector);

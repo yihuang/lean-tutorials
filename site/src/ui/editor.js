@@ -6,14 +6,14 @@ import { h } from './dom.js';
 import { expandAbbreviation, suggestAbbreviation, SYMBOL_BAR } from '../lean/unicode.js';
 
 /**
- * @param {{value?: string, placeholder?: string, onInput?: (value: string) => void, label?: string}} options
+ * @param {{value?: string, placeholder?: string, rows?: number, onInput?: (value: string) => void, label?: string}} options
  */
 export function createEditor(options = {}) {
   const textarea = h('textarea', {
     class: 'editor',
     value: options.value ?? '',
     placeholder: options.placeholder ?? '',
-    rows: 6,
+    rows: options.rows ?? 6,
     spellcheck: 'false',
     autocapitalize: 'off',
     autocomplete: 'off',

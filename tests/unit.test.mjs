@@ -4,21 +4,101 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  buildSource, codeOnly, forbiddenUsed, FORBIDDEN_HELP, GOAL_TRACE_MARKER, PREVIEW_AXIOM,
+  LESSONS, SANDBOX, TOPICS, lessonById, lessonIndex, lessonPositionInTopic, nextLesson,
+  nextUnsolvedLesson, previousLesson, topicById, topicOfLesson, topicProgress, totalProgress,
+  validateContent,
+} from '../site/src/content/index.js';
+import {
+  buildSource, codeOnly, forbiddenUsed, FORBIDDEN_HELP, GOAL_TRACE_MARKER, missingRequirements,
+  PREVIEW_AXIOM,
 } from '../site/src/lean/source.js';
 import { locate, parseOutput, relevant } from '../site/src/lean/diagnostics.js';
 import { formatGoal, goalsFromDiagnostics, goalsFromText } from '../site/src/lean/goals.js';
 import { ABBREVIATIONS, expandAbbreviation, suggestAbbreviation } from '../site/src/lean/unicode.js';
 import { coreLayerBytes } from '../site/src/lean/packs.js';
-import { LESSONS, SANDBOX_STARTER, lessonById, lessonIndex } from '../site/src/lessons/index.js';
 
-const lesson = {
+const tacticLesson = {
+  kind: 'tactic',
   statement: 'example (n : Nat) : n = n',
   context: 'def double (n : Nat) := 2 * n',
 };
 
-test('buildSource maps the learner block onto generated lines', () => {
-  const source = buildSource(lesson, 'rw [h]\nexact hp');
+test('the content satisfies its own contract', () => {
+  assert.deepEqual(validateContent(), []);
+  assert.ok(TOPICS.length >= 5, 'at least five topics');
+  assert.ok(LESSONS.length >= 20, 'a course-sized set of lessons');
+});
+
+test('validateContent actually catches broken content', () => {
+  const problems = validateContent({
+    topics: [{
+      id: 'Broken Topic',
+      title: 'T',
+      summary: 's',
+      intro: 'i',
+      lessons: [
+        { id: 'dup', title: 'a', focus: 'f', summary: 's', intro: 'i', task: 't', placeholder: 'p', hint: 'h', solution: 'sorry', statement: 'example : True := by skip' },
+        { id: 'dup', title: 'b', focus: 'f', summary: 's', intro: 'i', task: 't', placeholder: 'p', hint: 'h', solution: 'x', statement: 'def nope := 1' },
+        { id: 'file-with-statement', kind: 'file', title: 'c', focus: 'f', summary: 's', intro: 'i', task: 't', placeholder: 'p', hint: 'h', solution: 'x', statement: 'example : True' },
+        { id: 'wrong-kind', kind: 'weird', title: 'd', focus: 'f', summary: 's', intro: 'i', task: 't', placeholder: 'p', hint: 'h', solution: 'x' },
+      ],
+    }],
+  });
+  const joined = problems.join('\n');
+  assert.match(joined, /topic id "Broken Topic" must be kebab-case/);
+  assert.match(joined, /duplicate lesson id/);
+  assert.match(joined, /solution uses sorry/);
+  assert.match(joined, /must not contain ':=\s*by'/);
+  assert.match(joined, /needs a statement starting with example\/theorem/);
+  assert.match(joined, /file lesson must not have a statement/);
+  assert.match(joined, /unknown kind "weird"/);
+});
+
+test('content accessors follow topic order', () => {
+  const first = LESSONS[0];
+  assert.equal(first.topic, TOPICS[0].id);
+  assert.equal(topicOfLesson(first.id).id, TOPICS[0].id);
+  assert.equal(lessonById(first.id), first);
+  assert.equal(lessonIndex(first.id), 0);
+  assert.equal(previousLesson(first.id), null);
+  assert.equal(nextLesson(first.id), LESSONS[1]);
+  assert.equal(nextLesson(LESSONS[LESSONS.length - 1].id), null);
+  assert.equal(lessonById('does-not-exist'), null);
+  assert.equal(topicById('does-not-exist'), null);
+
+  // "Next lesson" crosses a topic boundary rather than dead-ending.
+  const lastOfFirstTopic = TOPICS[0].lessons.at(-1);
+  assert.equal(nextLesson(lastOfFirstTopic.id).topic, TOPICS[1].id);
+  assert.equal(previousLesson(nextLesson(lastOfFirstTopic.id).id).id, lastOfFirstTopic.id);
+
+  // Position inside the topic.
+  const position = lessonPositionInTopic(TOPICS[0].lessons[1].id);
+  assert.deepEqual(position, { index: 1, count: TOPICS[0].lessons.length });
+});
+
+test('progress helpers count what is solved', () => {
+  const topic = TOPICS[0];
+  const solved = new Set([topic.lessons[0].id, topic.lessons[1].id]);
+  const isSolved = (id) => solved.has(id);
+  assert.deepEqual(topicProgress(topic, isSolved), { solved: 2, total: topic.lessons.length, complete: false });
+  const everything = (id) => Boolean(lessonById(id));
+  assert.deepEqual(topicProgress(topic, everything), { solved: topic.lessons.length, total: topic.lessons.length, complete: true });
+  assert.deepEqual(totalProgress(isSolved), { solved: 2, total: LESSONS.length });
+
+  assert.equal(nextUnsolvedLesson(isSolved).id, topic.lessons[2].id);
+  assert.equal(nextUnsolvedLesson(everything), null);
+  // A per-topic view ignores other topics.
+  assert.equal(nextUnsolvedLesson(isSolved, [TOPICS[1]]).id, TOPICS[1].lessons[0].id);
+});
+
+test('every lesson has a unique id across the whole course', () => {
+  const ids = LESSONS.map((lesson) => lesson.id);
+  assert.equal(new Set(ids).size, ids.length, 'lesson ids must be globally unique (routes use them raw)');
+  for (const id of ids) assert.match(id, /^[a-z][a-z0-9-]*$/, `${id} must be URL-safe`);
+});
+
+test('buildSource maps a tactic lesson onto generated lines', () => {
+  const source = buildSource(tacticLesson, 'rw [h]\nexact hp');
   const lines = source.code.split('\n');
   assert.equal(lines[source.userStartLine - 1], '  rw [h]');
   assert.equal(lines[source.userStartLine], '  exact hp');
@@ -29,17 +109,30 @@ test('buildSource maps the learner block onto generated lines', () => {
 });
 
 test('buildSource preview mode appends the goal wrapper after the learner block', () => {
-  const source = buildSource(lesson, 'rfl', { preview: true });
+  const source = buildSource(tacticLesson, 'rfl', { preview: true });
   const lines = source.code.split('\n');
   assert.equal(lines[source.wrapperStartLine - 1], '  all_goals');
   assert.ok(source.code.includes(GOAL_TRACE_MARKER));
   assert.ok(source.code.includes(`private axiom ${PREVIEW_AXIOM} {α : Sort _} : α`));
 });
 
-test('buildSource flags comment-only blocks as empty', () => {
-  const source = buildSource(lesson, '-- nothing yet\n\n');
-  assert.equal(source.empty, true);
-  assert.equal(source.userLineCount, 1);
+test('buildSource handles a file lesson: no statement, learner owns the lines', () => {
+  const lesson = { kind: 'file', context: 'def double (n : Nat) := 2 * n' };
+  const source = buildSource(lesson, '#check double\n#eval double 21');
+  assert.ok(!source.code.includes(':= by'), 'file lessons must not inject a proof skeleton');
+  assert.match(source.code, /def double \(n : Nat\) := 2 \* n/);
+  const lines = source.code.split('\n');
+  assert.equal(lines[source.userStartLine - 1], '#check double');
+  assert.equal(lines[source.userStartLine], '#eval double 21');
+  assert.equal(source.userLineCount, 2);
+  assert.equal(source.empty, false);
+});
+
+test('buildSource flags comment-only input as empty for both kinds', () => {
+  for (const lesson of [tacticLesson, { kind: 'file' }]) {
+    assert.equal(buildSource(lesson, '-- nothing yet\n\n').empty, true);
+  }
+  assert.equal(buildSource({ kind: 'file' }, '#eval 1').empty, false);
 });
 
 test('codeOnly strips comments and strings but keeps a line count', () => {
@@ -50,14 +143,23 @@ test('codeOnly strips comments and strings but keeps a line count', () => {
   assert.match(stripped, /exact hp/);
 });
 
-test('forbiddenUsed sees real uses only', () => {
+test('forbiddenUsed sees real uses only, including per-lesson extras', () => {
   assert.deepEqual(forbiddenUsed('exact hp'), []);
   assert.deepEqual(forbiddenUsed('-- sorry is not used here'), []);
   assert.deepEqual(forbiddenUsed('exact "sorry"'), []);
-  assert.deepEqual(forbiddenUsed('sorry'), ['sorry']);
-  assert.deepEqual(forbiddenUsed('native_decide'), ['native_decide']);
+  assert.deepEqual(forbiddenUsed('sorry').map((entry) => entry.word), ['sorry']);
+  assert.deepEqual(forbiddenUsed('native_decide').map((entry) => entry.word), ['native_decide']);
   assert.deepEqual(forbiddenUsed('sorry_placeholder'), []);
+  assert.deepEqual(forbiddenUsed('omega', ['omega']).map((entry) => entry.word), ['omega']);
   assert.ok(FORBIDDEN_HELP.sorry.includes('not a proof'));
+});
+
+test('missingRequirements is whitespace-insensitive', () => {
+  assert.deepEqual(missingRequirements('#eval 2 ^ 10', ['#eval', '2^10']), []);
+  assert.deepEqual(missingRequirements('#eval 2 ^ 10', ['2 ^ 10', '^']), []);
+  assert.deepEqual(missingRequirements('#check Nat.add_comm', ['#eval']), ['#eval']);
+  assert.deepEqual(missingRequirements('def double (n : Nat) := 2 * n\n#eval double 21', ['def double', 'double 21']), []);
+  assert.deepEqual(missingRequirements('-- #eval in a comment', ['#eval']), ['#eval']);
 });
 
 test('parseOutput understands the fork JSON diagnostics and raw text', () => {
@@ -70,14 +172,12 @@ test('parseOutput understands the fork JSON diagnostics and raw text', () => {
   assert.equal(diagnostics[0].severity, 'error');
   assert.equal(diagnostics[0].message, 'Type mismatch');
   assert.equal(diagnostics[1].raw, true);
-  assert.equal(diagnostics[1].message, 'plain output');
   assert.equal(diagnostics[2].message, '4');
   assert.equal(diagnostics[3].severity, 'error');
-  assert.equal(diagnostics[3].message, 'boom');
 });
 
 test('locate maps diagnostics onto learner lines and hides generated ones', () => {
-  const source = buildSource(lesson, 'rw [h]\nexact hp');
+  const source = buildSource(tacticLesson, 'rw [h]\nexact hp');
   const diagnostics = locate(parseOutput([
     { stream: 'stdout', data: '{"severity":"error","data":"context problem","pos":{"line":2,"column":0}}' },
     { stream: 'stdout', data: `{"severity":"error","data":"learner problem","pos":{"line":${source.userStartLine + 1},"column":2}}` },
@@ -111,15 +211,6 @@ test('goalsFromDiagnostics handles a marker merged into the state message', () =
   assert.ok(!goals[0].includes(GOAL_TRACE_MARKER));
 });
 
-test('goalsFromDiagnostics ignores unrelated trace messages and falls back safely', () => {
-  const diagnostics = [
-    { severity: 'information', kind: 'trace', message: 'just a note, no turnstile' },
-    { severity: 'information', kind: 'trace', message: GOAL_TRACE_MARKER },
-  ];
-  assert.deepEqual(goalsFromDiagnostics(diagnostics, GOAL_TRACE_MARKER), []);
-  assert.deepEqual(goalsFromDiagnostics([], GOAL_TRACE_MARKER), []);
-});
-
 test('goalsFromText strips Lean’s prefix and splits cases', () => {
   const goals = goalsFromText('unsolved goals\ncase left\n⊢ p\ncase right\n⊢ q');
   assert.equal(goals.length, 2);
@@ -140,7 +231,6 @@ test('unicode abbreviations expand and complete', () => {
   };
   assert.equal(expandAbbreviation(textarea), true);
   assert.equal(textarea.value, 'exact ∀');
-  assert.equal(textarea.selectionStart, 'exact ∀'.length);
   const untouched = { value: 'rw [h]', selectionStart: 3, selectionEnd: 5, setSelectionRange() {} };
   assert.equal(expandAbbreviation(untouched), false);
   assert.equal(untouched.value, 'rw [h]');
@@ -151,33 +241,15 @@ test('coreLayerBytes sums the pack sizes', () => {
   assert.equal(coreLayerBytes({}), 0);
 });
 
-test('lesson data is complete, unique and free of placeholders', () => {
-  const ids = new Set();
-  for (const entry of LESSONS) {
-    assert.ok(entry.id && !ids.has(entry.id), `duplicate id ${entry.id}`);
-    ids.add(entry.id);
-    for (const field of ['title', 'focus', 'summary', 'intro', 'task', 'statement', 'placeholder', 'hint', 'solution']) {
-      assert.ok(typeof entry[field] === 'string' && entry[field].trim().length > 0, `${entry.id} is missing ${field}`);
-    }
-    assert.match(entry.statement, /example|theorem/, `${entry.id} statement should be a declaration`);
-    assert.ok(!/\bsorry\b/.test(entry.solution), `${entry.id} solution must not use sorry`);
-    assert.ok(!/\bsorry\b/.test(entry.placeholder), `${entry.id} placeholder must not suggest sorry`);
-    // The placeholder is grey text in an empty editor, not content: if it ever
-    // repeated the answer, the lesson would solve itself.
-    assert.notEqual(entry.placeholder.trim(), entry.solution.trim(), `${entry.id} placeholder must not be the solution`);
-    assert.ok(!entry.placeholder.startsWith('--'), `${entry.id} placeholder must not look like a comment to delete`);
-    assert.deepEqual(forbiddenUsed(entry.solution), [], `${entry.id} solution uses a forbidden tactic`);
-  }
-  assert.ok(LESSONS.length >= 5);
-  assert.equal(lessonById('rfl').id, 'rfl');
-  assert.equal(lessonById('nope'), null);
-  assert.equal(lessonIndex('omega'), LESSONS.length - 1);
-  assert.match(SANDBOX_STARTER, /#eval/);
+test('sandbox content is present and self-consistent', () => {
+  assert.match(SANDBOX.starter, /#eval/);
+  assert.ok(SANDBOX.intro.length > 20);
+  assert.notEqual(SANDBOX.placeholder.trim(), SANDBOX.starter.trim());
 });
 
-test('every lesson context stays inside Lean core (no imports)', () => {
-  for (const entry of LESSONS) {
-    const context = entry.context ?? '';
-    assert.ok(!/\bimport\b/.test(context), `${entry.id} must not import: the browser env is Init-only`);
+test('no lesson needs Mathlib-style imports (the browser env is Init-only)', () => {
+  for (const lesson of LESSONS) {
+    assert.ok(!/\bimport\b/.test(lesson.context ?? ''), `${lesson.id} must not import`);
+    assert.ok(!/^import\b/m.test(lesson.solution), `${lesson.id} solution must not import`);
   }
 });

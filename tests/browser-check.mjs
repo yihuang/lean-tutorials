@@ -68,15 +68,17 @@ try {
   console.log(`✓ Lean ready in ${((Date.now() - bootStart) / 1000).toFixed(1)}s (mem=${mem}MB, chrome=${CHROME}) — ${state.detail ?? state.message}`);
 
   const matrix = await page.evaluate(async () => {
-    const { LESSONS, checkLesson, engine } = window.leanTutorials;
+    const { content, checkLesson, engine } = window.leanTutorials;
     const out = [];
-    for (const lesson of LESSONS) {
+    for (const lesson of content.LESSONS) {
       const solution = await checkLesson(engine, lesson, lesson.solution);
       // An untouched lesson starts with an EMPTY editor (the prompt is a
       // placeholder attribute, not content), so that is what must be refused.
       const untouched = await checkLesson(engine, lesson, '');
       out.push({
         id: lesson.id,
+        topic: lesson.topic,
+        kind: lesson.kind,
         ok: solution.ok,
         kind: solution.kind,
         headline: solution.headline,
@@ -90,12 +92,21 @@ try {
     return out;
   });
 
+  const byTopic = new Map();
   for (const row of matrix) {
     const mark = row.ok && row.untouchedRejected ? '✓' : '✗';
     if (mark === '✗') failures += 1;
-    results.push(`${mark} ${row.id.padEnd(10)} ${row.ok ? 'solution ok' : `${row.kind}: ${row.headline}`} · untouched ${row.untouchedRejected ? 'rejected' : 'ACCEPTED'} · ${row.ms}ms`);
-    if (!row.ok) results.push(`    detail: ${row.detail}`);
-    for (const message of row.messages) results.push(`    ${message.split('\n')[0]}`);
+    if (!byTopic.has(row.topic)) byTopic.set(row.topic, []);
+    byTopic.get(row.topic).push(`${mark} ${row.id.padEnd(18)} ${row.ok ? 'ok' : `${row.kind}: ${row.headline}`}${row.untouchedRejected ? '' : ' · UNTOUCHED ACCEPTED'} ${row.ms}ms`);
+  }
+  for (const [topic, rows] of byTopic) {
+    results.push(`  ${topic}:`);
+    for (const row of rows) results.push(`  ${row}`);
+  }
+  for (const row of matrix) {
+    if (row.ok) continue;
+    results.push(`  !! ${row.id} (${row.kind}): ${row.detail}`);
+    for (const message of row.messages) results.push(`     ${message.split('\n')[0]}`);
   }
   console.log(results.join('\n'));
 
@@ -103,8 +114,8 @@ try {
   // visible, errors must point at the learner's own lines, and the ways of
   // faking a proof must be refused.
   const scenarios = await page.evaluate(async () => {
-    const { LESSONS, checkLesson, engine } = window.leanTutorials;
-    const lesson = (id) => LESSONS.find((entry) => entry.id === id);
+    const { content, checkLesson, engine } = window.leanTutorials;
+    const lesson = (id) => content.lessonById(id);
     const cases = [
       {
         name: 'incomplete proof shows the open goals',
@@ -208,6 +219,63 @@ try {
     && success.nextVisible && /^Next:/.test(success.nextLabel) && success.navAccented && success.titleSize >= 16;
   if (!uiOk) failures += 1;
   console.log(`${uiOk ? '✓' : '✗'} UI check: ${JSON.stringify(success)}`);
+
+  // A file lesson (kind 'file'): the output panel must show what Lean printed,
+  // and the verdict must not claim a proof was verified.
+  await page.evaluate(() => { location.hash = '#/lesson/check'; });
+  await page.waitForSelector('textarea.editor');
+  await page.fill('textarea.editor', '#check Nat.add_comm');
+  await page.click('.actions .btn.primary');
+  await page.waitForFunction(
+    () => document.querySelector('.result.ok, .banner.err, .banner.warn'),
+    null,
+    { timeout: 120000 },
+  );
+  const fileLesson = await page.evaluate(() => {
+    const result = document.querySelector('.result.ok');
+    return {
+      headline: result?.querySelector('.result-title')?.textContent ?? '',
+      output: document.querySelector('.feedback pre.goal')?.textContent ?? '',
+      hasEditor: Boolean(document.querySelector('textarea.editor')),
+      told: document.body.textContent.includes('whole file'),
+    };
+  });
+  const fileOk = fileLesson.headline === 'Ran clean' && /Nat\.add_comm/.test(fileLesson.output) && fileLesson.told;
+  if (!fileOk) failures += 1;
+  console.log(`${fileOk ? '✓' : '✗'} file lesson: ${JSON.stringify({ ...fileLesson, output: fileLesson.output.slice(0, 60) })}`);
+
+  // A file lesson with a required *value*: `#eval 2 ^ 3` satisfies the `require`
+  // rules (it uses #eval and ^) but prints the wrong number, so only `expects`
+  // can refuse it.
+  const wrongValue = await page.evaluate(async () => {
+    const { content, checkLesson, engine } = window.leanTutorials;
+    const lesson = content.lessonById('eval');
+    const wrong = await checkLesson(engine, lesson, '#eval 2 ^ 3');
+    const right = await checkLesson(engine, lesson, '#eval 2 ^ 10');
+    return {
+      wrongRefused: !wrong.ok,
+      wrongKind: wrong.kind,
+      wrongHeadline: wrong.headline,
+      wrongOutput: wrong.output?.[0] ?? '',
+      rightOk: right.ok,
+      rightOutput: right.output?.[0] ?? '',
+    };
+  });
+  const valueOk = wrongValue.wrongRefused && /output/i.test(wrongValue.wrongHeadline) && wrongValue.wrongOutput.includes('8')
+    && wrongValue.rightOk && wrongValue.rightOutput.includes('1024');
+  if (!valueOk) failures += 1;
+  console.log(`${valueOk ? '✓' : '✗'} required output: '#eval 2 ^ 3' refused (${wrongValue.wrongHeadline} — output ${wrongValue.wrongOutput}), '#eval 2 ^ 10' accepted (${wrongValue.rightOutput})`);
+
+  // The contract's `require` rule is enforced through the same policy path.
+  const requireRule = await page.evaluate(async () => {
+    const { content, checkLesson, engine } = window.leanTutorials;
+    const lesson = content.lessonById('define');
+    const wrong = await checkLesson(engine, lesson, '#eval 42');
+    return { kind: wrong.kind, headline: wrong.headline, message: wrong.messages?.[0]?.message ?? '' };
+  });
+  const requireOk = requireRule.kind === 'policy' && /def double/.test(requireRule.message);
+  if (!requireOk) failures += 1;
+  console.log(`${requireOk ? '✓' : '✗'} required source: ${requireRule.headline} — ${requireRule.message}`);
 
   // A blocked or rewritten runtime must produce an actionable error, not a wasm
   // "expected magic word" crash. This is exactly what CI hit when Cloudflare

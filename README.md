@@ -28,7 +28,7 @@ site/
   src/lean/diagnostics.js    JSON diagnostics → learner line numbers
   src/lean/goals.js          turn `trace_state` output into goal panels
   src/lean/unicode.js        Lean unicode abbreviations + symbol bar
-  src/lessons/index.js       lesson content
+  src/content/               the course: topics + lessons (data only)
   src/ui/                    editor, prose, DOM helpers
 functions/lean-wasm/[[path]].js   Pages Function: streams lean.wasm from its chunks
 scripts/fetch-runtime.mjs    download the pinned upstream runtime (verified)
@@ -48,6 +48,7 @@ npm test             # pure-function tests, no browser needed
 npm run test:e2e     # boots the real runtime in headless Chromium and checks every lesson
 npm run test:layout  # mobile geometry: no overflow, tap targets, sticky actions
 npm run test:a11y    # WCAG contrast for every text style, light and dark
+node tests/probe-lean.mjs   # authoring: does Lean accept this snippet?
 ```
 
 Every browser test accepts `--url <origin>` to run against a deployed origin
@@ -257,15 +258,46 @@ as `site/UPSTREAM-LICENSE-Apache-2.0.txt` and the credit is in the site footer.
 The binaries are not committed — `npm run prepare:runtime` fetches the pinned
 release and verifies its hashes.
 
-## Adding a lesson
+## Course structure: content vs mechanism
 
-Append an object to `src/lessons/index.js`. Lessons own the statement, learners
-own one indented tactic block, so a learner can never redefine what they are
-proving:
+The course is **31 lessons in 7 topics**, and the split between material and
+machinery is enforced rather than promised:
+
+```
+site/src/content/            data only — no imports from lean/ or ui/
+  index.js                   contract, aggregation, accessors, validateContent()
+  topics/foundations.js      one topic per module (id, title, intro, lessons)
+  topics/logic.js
+  topics/quantifiers.js
+  topics/numbers.js
+  topics/rewriting.js
+  topics/automation.js
+  topics/tools.js
+site/src/lean/               the mechanism: compile, diagnose, verify
+site/src/ui/, main.js        rendering, routing, progress
+```
+
+- **Content** declares everything: a lesson's `kind`, its statement or its
+  freedom, what the answer must contain, what the output must show. It never
+  knows how any of that is checked.
+- **The mechanism** switches on those declared fields and never on a lesson id,
+  and reaches content only through `content/index.js`. Adding a topic is then a
+  content-only change — no engine, checker or UI edit.
+- `tests/decoupling.test.mjs` fails if either side leaks: it greps the imports in
+  both directions, rejects any `=== '<lesson-id>'` in the mechanism, and checks
+  that each topic module exports exactly one topic named after its file.
+- `validateContent()` is the executable version of the contract, and the unit
+  tests run it (including against deliberately broken content, so the validator
+  itself is tested).
+
+### The two lesson kinds
 
 ```js
+// kind: 'tactic' (default) — the lesson owns the statement, the learner owns the
+// tactic block. The `:= by` and the goal-inspection wrapper are added for it.
 {
-  id: 'le', title: 'Order and arithmetic', focus: 'le_trans',
+  id: 'le', kind: 'tactic',
+  title: 'Order and arithmetic', focus: 'le_trans',
   summary: 'Chain two inequalities',
   intro: 'Prose with `code`, **bold** and [links](https://…).',
   task: 'Prove the goal using `h₁` and `h₂`.',
@@ -274,18 +306,47 @@ proving:
   hint: '`exact Nat.le_trans h₁ h₂`',
   solution: 'exact Nat.le_trans h₁ h₂',
 }
+
+// kind: 'file' — the learner owns the whole file, so commands (#check, #eval,
+// def) can be exercises too. `require` constrains the source, `expects`
+// constrains the output.
+{
+  id: 'double', kind: 'file',
+  title: 'Your own definition', focus: 'def',
+  summary: 'Define a function, then use it',
+  intro: '…', task: 'Define `double` and use it to print `42`.',
+  placeholder: 'def … then #eval …',
+  hint: '`def double (n : Nat) := 2 * n` and then `#eval double 21`.',
+  require: ['def double', 'double 21'],   // whitespace-insensitive
+  expects: ['42'],                        // must appear in the output
+  solution: 'def double (n : Nat) := 2 * n\n\n#eval double 21',
+}
 ```
 
 `placeholder` is a grey prompt inside an otherwise **empty** editor (the HTML
-`placeholder` attribute), so a learner never has to select and delete filler
-text before typing. `npm test` asserts that the placeholder is not the solution
-and does not look like a comment to remove.
+`placeholder` attribute), so a learner never has to select and delete filler text
+before typing.
 
-`npm test` asserts the shape of every lesson and `npm run test:e2e` proves that
-each `solution` is kernel-checked while an untouched (empty) lesson is refused — add a lesson,
-re-run both, and it is covered. `tests/browser-check.mjs` also asserts that open
-goals are shown, that errors point at the learner's own lines, and that error
-messages use the learner's (not the generated file's) numbering.
+### Workflow for adding material
+
+```bash
+node tests/probe-lean.mjs                     # is this snippet accepted by the real runtime?
+node tests/probe-lean.mjs --file my.json      # your own { name, statement, context, tactics }
+npm test                                      # contract + decoupling + pure functions
+npm run test:e2e                              # boots Lean and verifies every solution
+```
+
+`tests/probe-lean.mjs` is the important one: it boots the runtime once and runs a
+list of candidate lessons through the real checker, so a lesson never ships a
+solution Lean rejects. Every solution in this course was written after probing it
+(and a few plausible-looking ones — `use`, `by_contra`, a three-step
+`Nat.add_succ` rewrite — were dropped because Lean's Init environment refused
+them).
+
+`npm run test:e2e` then proves the contract holds end to end: each `solution` is
+kernel-checked while an untouched lesson is refused, required substrings and
+required output are enforced, and error messages use the *learner's* line
+numbers.
 
 ## Limits and notes
 

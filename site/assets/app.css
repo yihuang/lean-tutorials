@@ -139,6 +139,31 @@ p { margin: 0 0 12px; }
 
 .lesson-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
 
+/* Topic overview: one compact card per topic, progress as pips. */
+.topic-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+.topic-card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+}
+.topic-card[data-complete="true"] { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.topic-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 14px; min-height: 62px;
+  text-decoration: none; color: var(--text);
+}
+.topic-card[data-complete="true"] .lesson-num { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.topic-meta { min-width: 0; flex: 1; }
+.topic-title { display: block; font-weight: 600; font-size: 15px; }
+.topic-sub { display: block; font-size: 13px; color: var(--muted); }
+.topic-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.topic-count { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.pips { display: inline-flex; gap: 3px; }
+.pip { width: 7px; height: 7px; border-radius: 50%; background: var(--line); display: block; }
+.pip[data-state="solved"] { background: var(--ok); }
+.pip[data-state="next"] { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.topic-next { margin: 0; padding: 0 14px 12px; }
+@media (max-width: 420px) { .pips { display: none; } }
+
 .lesson-item a {
   display: flex; align-items: center; gap: 12px;
   padding: 13px 14px; min-height: 62px;

@@ -1,9 +1,16 @@
-// App shell: hash router, engine status UI, lesson pages, sandbox.
+// App shell: hash router, engine status, topic and lesson pages, sandbox.
+//
+// Content comes from src/content (data only); this file knows nothing about
+// specific lessons. It renders whatever the accessors hand it: topics, their
+// lessons, and the two lesson kinds the content contract defines.
 
 import { LeanEngine } from './lean/engine.js';
 import { checkLesson } from './lean/tutorial.js';
-import { parseOutput } from './lean/diagnostics.js';
-import { LESSONS, lessonById, lessonIndex, SANDBOX_STARTER } from './lessons/index.js';
+import { locate, parseOutput } from './lean/diagnostics.js';
+import {
+  LESSONS, SANDBOX, TOPICS, lessonById, lessonPositionInTopic, nextLesson, nextUnsolvedLesson,
+  previousLesson, topicById, topicOfLesson, topicProgress, totalProgress,
+} from './content/index.js';
 import { createEditor } from './ui/editor.js';
 import { clear, h } from './ui/dom.js';
 import { inlineProse, prose } from './ui/prose.js';
@@ -14,7 +21,7 @@ const chip = document.getElementById('engine-chip');
 const chipDot = chip.querySelector('.dot');
 const chipLabel = document.getElementById('engine-label');
 
-const bootBar = h('div', { class: 'progress-track', id: 'boot-bar', hidden: 'until-found' }, h('i'));
+const bootBar = h('div', { class: 'progress-track', id: 'boot-bar' }, h('i'));
 bootBar.style.display = 'none';
 document.querySelector('.topbar').after(bootBar);
 
@@ -40,6 +47,8 @@ function loadStore() {
 function saveStore() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch { /* private mode */ }
 }
+
+const isSolved = (id) => Boolean(store.solved[id]);
 
 const engine = new LeanEngine();
 engine.start().catch(() => { /* surfaced through engine.state */ });
@@ -72,10 +81,10 @@ engine.subscribe((current) => {
 
 function renderStatusPanel() {
   clear(statusPanel);
-  const p = engine.progress;
+  const progress = engine.progress;
   statusPanel.append(
     h('p', { class: 'eyebrow', text: 'Lean runtime' }),
-    h('p', { text: p.message || STATE_TEXT[engine.state] }),
+    h('p', { text: progress.message || STATE_TEXT[engine.state] }),
   );
   if (typeof SharedArrayBuffer === 'undefined') {
     statusPanel.append(h('p', { class: 'banner err', text:
@@ -85,7 +94,7 @@ function renderStatusPanel() {
   if (engine.state === 'error') {
     statusPanel.append(h('p', { class: 'banner err', text: engine.error?.message ?? 'Unknown error.' }));
   }
-  if (p.detail) statusPanel.append(h('p', { class: 'small muted', text: p.detail }));
+  if (progress.detail) statusPanel.append(h('p', { class: 'small muted', text: progress.detail }));
   if (engine.state === 'ready') {
     const { downloaded, cached } = engine.networkBytes;
     const mb = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
@@ -112,7 +121,8 @@ function route() {
   clear(main);
   statusPanel.style.display = 'none';
   syncUi = () => {};
-  if (section === 'lesson' && lessonById(param)) renderLesson(lessonById(param));
+  if (section === 'topic' && topicById(param)) renderTopic(topicById(param));
+  else if (section === 'lesson' && lessonById(param)) renderLesson(lessonById(param));
   else if (section === 'sandbox') renderSandbox();
   else renderHome();
   // The status panel belongs to the header chip, so it must exist on every view.
@@ -122,42 +132,71 @@ function route() {
 
 window.addEventListener('hashchange', route);
 
+// -------------------------------------------------------------------- parts
+
+const lessonHref = (id) => `#/lesson/${id}`;
+const topicHref = (id) => `#/topic/${id}`;
+
+const pips = (topic) => h('span', { class: 'pips', 'aria-hidden': 'true' },
+  topic.lessons.map((lesson) => h('i', {
+    class: 'pip',
+    dataset: { state: isSolved(lesson.id) ? 'solved' : lesson === nextUnsolvedLesson(isSolved, [topic]) ? 'next' : 'todo' },
+  })));
+
+function lessonRow(lesson, number, nextId) {
+  return h('li', {
+    class: 'lesson-item',
+    dataset: {
+      solved: isSolved(lesson.id) ? 'true' : 'false',
+      next: lesson.id === nextId ? 'true' : 'false',
+    },
+  }, h('a', { href: lessonHref(lesson.id) },
+    h('span', { class: 'lesson-num', text: String(number) }),
+    h('span', { class: 'lesson-meta' },
+      h('span', { class: 'lesson-title', text: lesson.title }),
+      h('span', { class: 'lesson-sub' }, h('code', { text: lesson.focus }), ` — ${lesson.summary}`)),
+    isSolved(lesson.id)
+      ? h('span', { class: 'lesson-tick', text: '✓' })
+      : (lesson.id === nextId ? h('span', { class: 'next-chip', text: 'next' }) : null)));
+}
+
 // -------------------------------------------------------------------- home
 
-function lessonHref(id) { return `#/lesson/${id}`; }
-
 function renderHome() {
-  const solved = LESSONS.filter((lesson) => store.solved[lesson.id]).length;
-  const nextUp = LESSONS.find((lesson) => !store.solved[lesson.id]) ?? null;
+  const overall = totalProgress(isSolved);
+  const nextUp = nextUnsolvedLesson(isSolved);
 
   main.append(
     h('h1', { text: 'Proofs, checked on your own device' }),
     h('p', {}, inlineProse(
-      'These are short Lean 4 tutorials. The real Lean compiler runs locally in WebAssembly — ' +
+      'Short Lean 4 tutorials in seven topics. The real Lean compiler runs locally in WebAssembly — ' +
       'your browser checks every proof, nothing is sent to a server, and it works on a phone.')),
     h('p', { class: 'small muted', text:
-      `${solved} of ${LESSONS.length} lessons done. ` +
-      `${engine.state === 'ready' ? 'Lean is ready — checks are instant.' : 'Lean is still warming up in the background.'}` }),
+      `${overall.solved} of ${overall.total} lessons done · ` +
+      `${TOPICS.filter((topic) => topicProgress(topic, isSolved).complete).length} of ${TOPICS.length} topics finished · ` +
+      `${engine.state === 'ready' ? 'Lean is ready, checks are instant' : 'Lean is still warming up in the background'}` }),
     nextUp
       ? h('p', {}, inlineProse(`Next up: **${nextUp.title}** — `), h('a', { href: lessonHref(nextUp.id), text: 'continue →' }))
       : h('p', {}, inlineProse('All lessons done. Try the [sandbox](#/sandbox) with your own statements.')),
   );
 
-  const list = h('ol', { class: 'lesson-list' });
-  LESSONS.forEach((lesson, index) => {
-    const solved = Boolean(store.solved[lesson.id]);
-    list.append(h('li', {
-      class: 'lesson-item',
-      dataset: { solved: solved ? 'true' : 'false', next: lesson === nextUp ? 'true' : 'false' },
-    }, h('a', { href: lessonHref(lesson.id) },
-      h('span', { class: 'lesson-num', text: String(index + 1) }),
-      h('span', { class: 'lesson-meta' },
-        h('span', { class: 'lesson-title', text: lesson.title }),
-        h('span', { class: 'lesson-sub' }, h('code', { text: lesson.focus }), ` — ${lesson.summary}`)),
-      solved
-        ? h('span', { class: 'lesson-tick', text: '✓' })
-        : (lesson === nextUp ? h('span', { class: 'next-chip', text: 'next' }) : null),
-    )));
+  const list = h('ol', { class: 'topic-list' });
+  TOPICS.forEach((topic, index) => {
+    const progress = topicProgress(topic, isSolved);
+    const next = topic.lessons.find((lesson) => !isSolved(lesson.id));
+    list.append(h('li', { class: 'topic-card', dataset: { complete: progress.complete ? 'true' : 'false' } },
+      h('a', { class: 'topic-head', href: topicHref(topic.id) },
+        h('span', { class: 'lesson-num', text: String(index + 1) }),
+        h('span', { class: 'topic-meta' },
+          h('span', { class: 'topic-title', text: topic.title }),
+          h('span', { class: 'topic-sub', text: topic.summary })),
+        h('span', { class: 'topic-side' },
+          pips(topic),
+          h('span', { class: 'topic-count', text: `${progress.solved}/${progress.total}` }))),
+      h('p', { class: 'topic-next small muted' },
+        next
+          ? [inlineProse('Next: '), h('a', { href: lessonHref(next.id), text: next.title })]
+          : inlineProse(`All ${progress.total} lessons done.`))));
   });
   main.append(list);
 
@@ -174,53 +213,89 @@ function renderHome() {
         'on your device. The first visit downloads that runtime (about 47 MB brotli-compressed), then stores it in ' +
         'the browser cache. Afterwards, checking a proof takes milliseconds.')),
       h('p', {}, inlineProse(
-        'The runtime and the packed Lean core library come from [lean.cau.li](https://lean.cau.li) ' +
-        '([source](https://github.com/cauli/lean4-wasm-in-browser), Apache-2.0), served from this site so the ' +
-        'worker stays same-origin.')),
+        'The runtime and the packed Lean core library are redistributed from ' +
+        '[lean.cau.li](https://lean.cau.li) ([source](https://github.com/cauli/lean4-wasm-in-browser), Apache-2.0), ' +
+        'served from this origin because the worker has to be same-origin.')),
       h('p', { class: 'small muted' }, inlineProse(
         'Requirements: a browser with WebAssembly threads (SharedArrayBuffer), i.e. a cross-origin isolated page. ' +
         'On iOS the runtime needs a recent Safari; on low-memory devices it may take a couple of attempts.')))));
 }
 
+// ------------------------------------------------------------------- topic
+
+function renderTopic(topic) {
+  const index = TOPICS.indexOf(topic);
+  const progress = topicProgress(topic, isSolved);
+  const next = topic.lessons.find((lesson) => !isSolved(lesson.id)) ?? topic.lessons[0];
+  const remaining = topic.lessons.length - progress.solved;
+
+  main.append(
+    h('p', { class: 'eyebrow' }, h('a', { href: '#/', text: 'All topics' }), ` · topic ${index + 1} of ${TOPICS.length}`),
+    h('h1', { text: topic.title }),
+  );
+  main.append(prose(topic.intro));
+  main.append(h('p', { class: 'small muted' }, `${progress.solved} of ${progress.total} lessons done` +
+    (progress.complete ? ' — topic finished.' : ` · ${remaining} to go`)));
+  main.append(h('p', {}, h('a', {
+    class: 'btn primary', href: lessonHref(next.id), style: 'display:inline-block',
+    text: progress.solved === 0 ? `Start: ${next.title} →` : `Continue: ${next.title} →`,
+  })));
+
+  const list = h('ol', { class: 'lesson-list' });
+  const nextId = nextUnsolvedLesson(isSolved)?.id ?? null;
+  topic.lessons.forEach((lesson, position) => list.append(lessonRow(lesson, position + 1, nextId)));
+  main.append(list);
+}
+
 // ------------------------------------------------------------------ lesson
 
 function renderLesson(lesson) {
-  const index = lessonIndex(lesson.id);
-  const previous = LESSONS[index - 1];
-  const next = LESSONS[index + 1];
-  let tactics = store.drafts[lesson.id] ?? '';
+  const topic = topicOfLesson(lesson.id);
+  const position = lessonPositionInTopic(lesson.id);
+  const previous = previousLesson(lesson.id);
+  const next = nextLesson(lesson.id);
+  const isFile = (lesson.kind ?? 'tactic') === 'file';
+
+  let input = store.drafts[lesson.id] ?? '';
   let checking = false;
-  // Set when the *current* editor contents were the ones the kernel accepted.
+  // Set when the *current* editor contents were the ones Lean accepted.
   let verified = false;
 
   main.append(
-    h('p', { class: 'eyebrow' }, `Lesson ${index + 1} of ${LESSONS.length} · `, h('code', { text: lesson.focus })),
+    h('p', { class: 'eyebrow' },
+      h('a', { href: topicHref(topic.id), text: topic.title }),
+      ` · lesson ${position.index + 1} of ${position.count} · `,
+      h('code', { text: lesson.focus })),
     h('h1', { text: lesson.title }),
   );
   main.append(prose(lesson.intro));
 
   const feedback = h('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
   const editor = createEditor({
-    value: tactics,
+    value: input,
     placeholder: lesson.placeholder,
-    label: 'Your tactic block',
+    rows: isFile ? 10 : 6,
+    label: isFile ? 'Your Lean file' : 'Your tactic block',
     onInput: (value) => {
-      tactics = value;
+      input = value;
       if (value) store.drafts[lesson.id] = value;
       else delete store.drafts[lesson.id];
       saveStore();
-      // Editing after a success means the proof is no longer the verified one;
+      // Editing after a success means the verified answer is no longer on screen;
       // the solved lesson and its way onward stay marked.
       if (verified) { verified = false; clear(feedback); syncButtons(); }
     },
   });
 
-  const checkButton = h('button', { class: 'btn primary', type: 'button', text: 'Check proof', onclick: () => runCheck() });
+  const checkButton = h('button', {
+    class: 'btn primary', type: 'button', text: isFile ? 'Run file' : 'Check proof',
+    onclick: () => runCheck(),
+  });
   const clearButton = h('button', {
     class: 'btn ghost', type: 'button', text: 'Clear',
     onclick: () => {
       editor.setValue('');
-      tactics = '';
+      input = '';
       delete store.drafts[lesson.id];
       saveStore();
       verified = false;
@@ -239,20 +314,16 @@ function renderLesson(lesson) {
   nextButton.hidden = true;
   const actions = h('div', { class: 'actions' }, checkButton, clearButton, h('span', { class: 'spacer' }), nextButton);
 
-  const usedSolution = () => {
-    editor.setValue(lesson.solution);
-    tactics = lesson.solution;
-    store.drafts[lesson.id] = tactics;
-    saveStore();
-    editor.focus();
-  };
-
-  main.append(h('div', { class: 'card', style: 'margin-top:14px' },
+  const card = h('div', { class: 'card', style: 'margin-top:14px' },
     h('p', { class: 'eyebrow', text: 'Your turn' }),
     h('p', {}, inlineProse(lesson.task)),
-    h('pre', { class: 'statement' }, h('span', { class: 'lbl', text: '⊢ ' }), lesson.statement),
+    isFile
+      ? h('p', { class: 'small muted' }, inlineProse(
+        'This one is a whole file: commands like `#check`, `#eval` and `def` are allowed, and the output appears below.'))
+      : h('pre', { class: 'statement' }, h('span', { class: 'lbl', text: '⊢ ' }), lesson.statement),
     editor.element,
-    actions));
+    actions);
+  main.append(card);
 
   main.append(h('details', { class: 'hint', style: 'margin-top:12px' },
     h('summary', { text: 'Hint' }),
@@ -262,26 +333,38 @@ function renderLesson(lesson) {
     h('summary', { text: 'One solution' }),
     h('div', { class: 'body' },
       h('pre', { class: 'statement', text: lesson.solution }),
-      h('button', { class: 'btn', type: 'button', text: 'Put it in the editor', onclick: usedSolution }))));
+      h('button', {
+        class: 'btn', type: 'button', text: 'Put it in the editor',
+        onclick: () => {
+          editor.setValue(lesson.solution);
+          input = lesson.solution;
+          store.drafts[lesson.id] = input;
+          saveStore();
+          editor.focus();
+        },
+      }))));
 
   main.append(feedback);
 
-  const nextLink = h('a', { href: next ? lessonHref(next.id) : '#/sandbox', text: next ? `${next.title} →` : 'Sandbox →' });
+  const nextLink = h('a', {
+    href: next ? lessonHref(next.id) : '#/sandbox',
+    text: next ? `${next.title} →` : 'Sandbox →',
+  });
   main.append(h('nav', { class: 'lesson-nav' },
     previous
       ? h('a', { href: lessonHref(previous.id), text: `← ${previous.title}` })
-      : h('a', { href: '#/', text: '← All lessons' }),
+      : h('a', { href: topicHref(topic.id), text: `← ${topic.title}` }),
     nextLink));
 
   function syncButtons() {
     checkButton.disabled = checking || engine.state !== 'ready';
     checkButton.textContent = checking
-      ? 'Checking…'
+      ? (isFile ? 'Running…' : 'Checking…')
       : verified ? '✓ Verified'
-        : engine.state === 'ready' ? 'Check proof' : 'Preparing Lean…';
+        : engine.state === 'ready' ? (isFile ? 'Run file' : 'Check proof') : 'Preparing Lean…';
     checkButton.classList.toggle('done', verified);
-    nextButton.hidden = !verified && !store.solved[lesson.id];
-    nextLink?.classList.toggle('accent', Boolean(store.solved[lesson.id]) || verified);
+    nextButton.hidden = !verified && !isSolved(lesson.id);
+    nextLink.classList.toggle('accent', isSolved(lesson.id) || verified);
   }
 
   function setChecking(value) {
@@ -291,7 +374,6 @@ function renderLesson(lesson) {
 
   syncUi = () => setChecking(checking);
   setChecking(false);
-  syncButtons();
   editor.focus();
 
   async function runCheck() {
@@ -303,12 +385,15 @@ function renderLesson(lesson) {
     }
     setChecking(true);
     clear(feedback);
-    feedback.append(h('p', { class: 'banner info', text: 'Lean is checking your proof…' }));
+    feedback.append(h('p', { class: 'banner info', text: isFile ? 'Lean is running your file…' : 'Lean is checking your proof…' }));
     let result;
     try {
-      result = await checkLesson(engine, lesson, tactics);
+      result = await checkLesson(engine, lesson, input);
     } catch (error) {
-      result = { ok: false, kind: 'runtime', headline: 'Something went wrong', detail: String(error?.message ?? error), messages: [], goals: [] };
+      result = {
+        ok: false, kind: 'runtime', headline: 'Something went wrong',
+        detail: String(error?.message ?? error), messages: [], goals: [], output: [],
+      };
     }
     setChecking(false);
     if (result.ok) {
@@ -325,14 +410,14 @@ function renderLesson(lesson) {
   });
 }
 
-function renderFeedback(container, result, lesson, context = {}) {
+function renderFeedback(container, result, lesson) {
   clear(container);
   const tone = result.ok ? 'ok' : result.kind === 'runtime' ? 'warn' : 'err';
   if (result.ok) {
     container.append(h('div', { class: 'result ok' },
       h('span', { class: 'check', 'aria-hidden': 'true', text: '✓' }),
       h('span', {},
-        h('strong', { class: 'result-title', text: 'Proof verified' }),
+        h('strong', { class: 'result-title', text: result.headline }),
         h('span', { class: 'result-detail', text: result.elapsed
           ? `The Lean kernel checked it here · ${Math.round(result.elapsed)} ms`
           : 'The Lean kernel checked it here' }))));
@@ -340,6 +425,11 @@ function renderFeedback(container, result, lesson, context = {}) {
     container.append(h('div', { class: `banner ${tone}` },
       h('span', { text: '✕' }),
       h('span', {}, h('strong', { text: `${result.headline}. ` }), result.detail)));
+  }
+
+  if (result.output?.length) {
+    container.append(h('p', { class: 'eyebrow', text: 'Output' }));
+    container.append(h('pre', { class: 'goal', text: result.output.join('\n') }));
   }
 
   if (result.goals?.length) {
@@ -372,11 +462,13 @@ function renderFeedback(container, result, lesson, context = {}) {
 // ----------------------------------------------------------------- sandbox
 
 function renderSandbox() {
-  let code = store.sandbox || SANDBOX_STARTER;
+  let code = store.sandbox || SANDBOX.starter;
   const output = h('div', { class: 'feedback' });
 
   const editor = createEditor({
     value: code,
+    placeholder: SANDBOX.placeholder,
+    rows: 12,
     label: 'Lean file',
     onInput: (value) => { code = value; store.sandbox = value; saveStore(); },
   });
@@ -384,11 +476,9 @@ function renderSandbox() {
   const runButton = h('button', { class: 'btn primary', type: 'button', text: 'Run', onclick: () => run() });
 
   main.append(
-    h('p', { class: 'eyebrow', text: 'Sandbox' }),
-    h('h1', { text: 'A blank Lean file' }),
-    h('p', {}, inlineProse(
-      'Everything is elaborated against Lean’s Init environment: definitions, `#check`, `#eval`, theorems. ' +
-      'Imports are unavailable — there is no Mathlib in the browser build.')),
+    h('p', { class: 'eyebrow' }, h('a', { href: '#/', text: 'All topics' }), ' · free play'),
+    h('h1', { text: SANDBOX.title }),
+    h('p', {}, inlineProse(SANDBOX.intro)),
     h('div', { class: 'card' }, editor.element, h('div', { class: 'actions' }, runButton)),
     output,
   );
@@ -447,4 +537,7 @@ route();
 
 // Debug/automation hook: reachable from the console (and from tests), which is
 // what to use when a proof behaves unexpectedly.
-window.leanTutorials = { engine, checkLesson, LESSONS, store };
+window.leanTutorials = {
+  engine, checkLesson, store,
+  content: { TOPICS, LESSONS, SANDBOX, lessonById, topicById, nextLesson, previousLesson, topicProgress },
+};

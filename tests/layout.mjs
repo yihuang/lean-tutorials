@@ -52,13 +52,35 @@ const overflow = async (label, target = page) => {
 };
 
 await overflow('home');
-check((await page.$$('li.lesson-item')).length >= 5, 'home: lesson list rendered');
-const homeTap = await page.evaluate(() => {
-  const link = document.querySelector('li.lesson-item a');
-  const rect = link.getBoundingClientRect();
-  return { height: rect.height, width: rect.width };
+const topics = await page.evaluate(() => {
+  const cards = [...document.querySelectorAll('li.topic-card')];
+  const first = cards[0]?.querySelector('a.topic-head');
+  return {
+    count: cards.length,
+    titles: cards.map((card) => card.querySelector('.topic-title')?.textContent ?? ''),
+    pips: cards.map((card) => card.querySelectorAll('.pip').length),
+    counts: cards.map((card) => card.querySelector('.topic-count')?.textContent ?? ''),
+    tapHeight: first ? Math.round(first.getBoundingClientRect().height) : 0,
+  };
 });
-check(homeTap.height >= 44, 'home: lesson rows are tappable', `${Math.round(homeTap.height)}px tall`);
+check(topics.count >= 5, 'home: topic cards rendered', topics.titles.join(', '));
+check(topics.pips.every((count) => count >= 3), 'home: each topic shows a pip per lesson', JSON.stringify(topics.pips));
+check(topics.counts.every((text) => /^\d+\/\d+$/.test(text)), 'home: topic progress is shown', topics.counts.join(' '));
+check(topics.tapHeight >= 44, 'home: topic headers are tappable', `${topics.tapHeight}px`);
+
+// Topic page: the topic's own lessons, and the way back to all topics.
+await page.evaluate(() => { location.hash = '#/topic/logic'; });
+await page.waitForSelector('li.lesson-item');
+await overflow('topic');
+const topicPage = await page.evaluate(() => ({
+  rows: document.querySelectorAll('li.lesson-item').length,
+  heading: document.querySelector('h1')?.textContent ?? '',
+  back: document.querySelector('.eyebrow a')?.getAttribute('href') ?? '',
+  cta: document.querySelector('a.btn.primary')?.textContent?.trim() ?? '',
+}));
+check(topicPage.rows >= 3 && topicPage.heading === 'Logic', 'topic page lists its lessons', `${topicPage.heading}: ${topicPage.rows} lessons`);
+check(topicPage.back === '#/', 'topic page links back to all topics', topicPage.back);
+check(/→$/.test(topicPage.cta), 'topic page offers a start/continue button', topicPage.cta);
 
 await page.evaluate(() => { location.hash = '#/lesson/and'; });
 await page.waitForSelector('textarea.editor');
