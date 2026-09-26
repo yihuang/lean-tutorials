@@ -276,6 +276,93 @@ try {
   if (!finishedOk) failures += 1;
   console.log(`${finishedOk ? '✓' : '✗'} infoview at the end of a finished proof: ${JSON.stringify(finished)}`);
 
+  // --- Focus mode, against the real runtime ---------------------------------
+  // One end-to-end pass through the immersive mode: enter, type, watch the goals
+  // follow the caret inside the mode, Check, verified, Esc out.
+  {
+    const focusState = () => page.evaluate(() => {
+      const sheet = document.querySelector('main');
+      const editor = document.querySelector('textarea.editor');
+      const check = document.querySelector('.actions .btn.primary');
+      const panel = document.querySelector('.infoview');
+      const checkRect = check.getBoundingClientRect();
+      const sheetRect = sheet.getBoundingClientRect();
+      const inView = (node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.top >= -1 && rect.bottom <= window.innerHeight + 1 && rect.height > 0;
+      };
+      return {
+        focus: document.documentElement.dataset.focus ?? 'false',
+        title: document.querySelector('.focus-title')?.textContent ?? '',
+        topbar: getComputedStyle(document.querySelector('.topbar')).display,
+        sheetHeight: Math.round(sheetRect.height),
+        sheetTop: Math.round(sheetRect.top),
+        viewportHeight: window.innerHeight,
+        editorHeight: Math.round(editor.getBoundingClientRect().height),
+        editorFocused: document.activeElement === editor,
+        goalsVisible: inView(panel),
+        goals: panel.querySelectorAll('.goal-card').length,
+        infoviewState: panel.dataset.state,
+        checkHeight: Math.round(checkRect.height),
+        checkVisible: inView(check),
+        hit: String(document.elementFromPoint(checkRect.left + checkRect.width / 2, checkRect.top + checkRect.height / 2)?.className ?? ''),
+        scrollY: Math.round(window.scrollY),
+        checkLabel: check.textContent,
+      };
+    });
+
+    await page.evaluate(() => document.querySelector('.focus-toggle').click());
+    await page.waitForFunction(() => document.documentElement.dataset.focus === 'true');
+    const entered = await focusState();
+    const enteredOk = entered.focus === 'true' && entered.topbar === 'none' && entered.title.length > 0
+      && entered.sheetTop === 0 && Math.abs(entered.sheetHeight - entered.viewportHeight) <= 1
+      && entered.editorFocused && entered.goalsVisible && entered.checkVisible && entered.checkHeight >= 44
+      && entered.hit.includes('btn') && entered.scrollY === 0;
+    if (!enteredOk) failures += 1;
+    console.log(`${enteredOk ? '✓' : '✗'} focus mode: entered the real lesson — ` +
+      `sheet ${entered.sheetHeight}px of ${entered.viewportHeight}px, editor ${entered.editorHeight}px, ` +
+      `goals visible ${entered.goalsVisible}, Check ${entered.checkHeight}px as ${entered.hit || 'nothing'}`);
+
+    // The goals panel must keep following the caret while the mode is up.
+    await page.fill('textarea.editor', 'constructor');
+    await caretTo(0);
+    await page.waitForFunction(() => document.querySelector('.infoview')?.dataset.state === 'goals'
+      && document.querySelectorAll('.infoview .goal-card').length === 2, null, { timeout: 120000 });
+    const inMode = await focusState();
+    const inModeOk = inMode.goals === 2 && inMode.goalsVisible && inMode.infoviewState === 'goals';
+    if (!inModeOk) failures += 1;
+    console.log(`${inModeOk ? '✓' : '✗'} focus mode: the goals still follow the caret inside the mode — ` +
+      `${inMode.goals} goals, panel ${inMode.goalsVisible ? 'on screen' : 'off screen'}, editor ${inMode.editorHeight}px`);
+
+    await page.fill('textarea.editor', 'exact ⟨hp, hq⟩');
+    await caretTo(0);
+    await page.waitForFunction(() => document.querySelector('.infoview')?.dataset.state === 'complete', null, { timeout: 120000 });
+    await page.click('.actions .btn.primary');
+    await page.waitForSelector('.result.ok', { timeout: 120000 });
+    const verified = await focusState();
+    const verdict = await page.evaluate(() => {
+      const result = document.querySelector('.result.ok');
+      const vote = result.querySelector('.result-title')?.textContent ?? '';
+      const rect = result.getBoundingClientRect();
+      return { vote, onScreen: rect.top >= -1 && rect.bottom <= window.innerHeight + 1 };
+    });
+    const verifiedOk = verified.focus === 'true' && verified.checkLabel.includes('✓')
+      && verdict.vote === 'Proof verified' && verdict.onScreen && verified.scrollY === 0;
+    if (!verifiedOk) failures += 1;
+    console.log(`${verifiedOk ? '✓' : '✗'} focus mode: Check inside the mode — ${JSON.stringify({ ...verdict, check: verified.checkLabel, scrollY: verified.scrollY })}`);
+
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.documentElement.dataset.focus === 'false');
+    const left = await page.evaluate(() => ({
+      topbar: getComputedStyle(document.querySelector('.topbar')).display,
+      active: String(document.activeElement?.className ?? ''),
+      stored: JSON.parse(localStorage.getItem('lean-tutorials:v1')).focusMode,
+    }));
+    const leftOk = left.topbar === 'flex' && left.active.includes('focus-toggle') && left.stored === false;
+    if (!leftOk) failures += 1;
+    console.log(`${leftOk ? '✓' : '✗'} focus mode: Esc exits, the page returns and the choice is remembered as off — ${JSON.stringify(left)}`);
+  }
+
   // A file lesson (kind 'file'): the output panel must show what Lean printed,
   // and the verdict must not claim a proof was verified.
   await page.evaluate(() => { location.hash = '#/lesson/check'; });

@@ -135,6 +135,10 @@ p { margin: 0 0 12px; }
   color: var(--muted); margin: 0 0 6px;
 }
 
+/* The lesson workbench card, spaced from the prose above it (focus mode drops
+   this, so it lives here rather than as an inline style). */
+.lesson-card { margin-top: 14px; }
+
 /* ------------------------------------------------------------ lesson list */
 
 .lesson-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
@@ -373,6 +377,7 @@ textarea.editor::placeholder {
 }
 a.btn { line-height: 1.2; }
 .btn:active { transform: translateY(1px); }
+.btn[hidden] { display: none; } /* `.btn` sets display, which would beat the [hidden] UA rule */
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 .btn.primary {
   background: var(--accent); border-color: transparent; color: #fff;
@@ -504,3 +509,157 @@ kbd {
   border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px;
   padding: 1px 5px; background: var(--surface);
 }
+
+/* -------------------------------------------------------------- focus mode */
+
+/* A distraction-free sheet over one lesson. Deliberately in-page instead of the
+   Fullscreen API: iOS Safari has no element fullscreen, and a second code path
+   for browsers that do would be a second thing to get wrong (and Esc would mean
+   "leave fullscreen" rather than "leave the mode"). Everything is keyed off
+   html[data-focus="true"], which main.js sets. */
+
+html[data-focus="true"], html[data-focus="true"] body { overflow: hidden; overscroll-behavior: none; }
+
+/* Chrome the mode exists to remove: the top bar, the footer, the breadcrumb, the
+   title, the prose, the hint and solution panels and the lesson nav. */
+html[data-focus="true"] .topbar,
+html[data-focus="true"] .footer,
+html[data-focus="true"] main > p,
+html[data-focus="true"] main > ul,
+html[data-focus="true"] main > h1,
+html[data-focus="true"] main > details,
+html[data-focus="true"] .lesson-nav,
+html[data-focus="true"] .editor-head,
+/* The chip that opens this panel lives in the hidden top bar, so an open panel
+   would be stranded: hide it with the bar. */
+html[data-focus="true"] #engine-panel { display: none !important; }
+
+/* The sheet is sized from the *visual* viewport (--focus-h/--focus-top, written
+   by main.js) and falls back to dvh. On iOS only the visual viewport shrinks
+   when the soft keyboard opens, so dvh alone would leave the caret and Check
+   under the keyboard. Fixed positioning is what keeps the page behind it still. */
+html[data-focus="true"] main {
+  position: fixed;
+  top: var(--focus-top, 0px);
+  left: 0; right: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  height: var(--focus-h, 100dvh);
+  max-width: 900px; margin: 0 auto;
+  padding: max(8px, env(safe-area-inset-top)) 12px max(8px, env(safe-area-inset-bottom));
+  background: var(--bg);
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+}
+
+/* The slim bar that replaces the top bar: the way out, and what you are editing. */
+.focus-bar { display: none; }
+html[data-focus="true"] .focus-bar {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  min-height: 44px;
+}
+.focus-exit {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 44px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--surface); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 550; cursor: pointer;
+}
+.focus-exit .glyph { color: var(--muted); font-size: 13px; }
+.focus-title {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 14.5px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Flatten the card: in the mode the sheet *is* the card. */
+html[data-focus="true"] .card {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 0; padding: 0;
+  border: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
+html[data-focus="true"] .card > .eyebrow,
+html[data-focus="true"] .card > p:not(.statement):not(.statement-note) { display: none; }
+
+/* The statement is the one thing that must never leave the screen: a single
+   strip, scrolled inside itself rather than pushing the editor away. */
+html[data-focus="true"] .card > .statement,
+html[data-focus="true"] .card > .statement-note {
+  flex: none; width: 100%; min-width: 0; margin: 0; padding: 6px 10px;
+  white-space: nowrap; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+}
+html[data-focus="true"] .card > :is(.statement, .statement-note)::-webkit-scrollbar { display: none; }
+
+html[data-focus="true"] .workbench {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; gap: 8px; margin: 0;
+}
+html[data-focus="true"] .workbench-main {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+/* The goals stay on screen but cannot swallow it: the panel is capped and its
+   body scrolls, and it is the first thing to give up space on a short viewport
+   (see the floors on the editor below). */
+html[data-focus="true"] .infoview {
+  flex: 0 1 auto; min-height: 44px;
+  max-height: min(34dvh, 300px);
+  display: flex; flex-direction: column;
+}
+html[data-focus="true"] .infoview-body {
+  flex: 1 1 auto; min-height: 0; max-height: none;
+  overflow: auto; overscroll-behavior: contain;
+}
+
+/* The editor takes what is left. The wrap keeps a floor so a short sheet (soft
+   keyboard) can never clip the textarea or push the actions row off screen. */
+html[data-focus="true"] .editor-wrap {
+  flex: 1 1 auto; min-height: 104px;
+  display: flex; flex-direction: column;
+}
+html[data-focus="true"] textarea.editor { flex: 1 1 auto; min-height: 48px; resize: none; }
+
+html[data-focus="true"] .actions {
+  flex: none; position: static; margin: 0; padding: 0;
+  background: none; backdrop-filter: none;
+}
+
+/* The verdict and the diagnostics are part of the working set, not clutter: in
+   the mode they appear as a bounded, scrollable strip under the actions. Empty,
+   this is 0px tall, so it costs the editor nothing. */
+html[data-focus="true"] .feedback {
+  flex: none; margin: 0; gap: 6px;
+  max-height: min(28dvh, 220px);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+
+/* Desktop keeps the goals beside the editor: there is room for both, and that is
+   the shape the rest of the app taught the reader. */
+@media (min-width: 900px) {
+  html[data-focus="true"] .workbench { flex-direction: row; align-items: stretch; }
+  html[data-focus="true"] .workbench .infoview { order: 2; position: static; flex: 0 1 340px; max-height: none; min-height: 0; }
+  html[data-focus="true"] .workbench .workbench-main { order: 1; }
+}
+
+/* The way into the mode, in the editor's own header (unchanged outside it). */
+.editor-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--line); background: var(--surface-2);
+}
+.editor-label {
+  min-width: 0; font-size: 12px; font-weight: 650; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.focus-toggle {
+  flex: none; margin-left: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  font-size: 17px; line-height: 1; cursor: pointer;
+}
+.focus-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
