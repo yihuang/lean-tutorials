@@ -315,6 +315,38 @@ cursor line 1 of:
 `site/src/ui/infoview-panel.js` renders a result as Lean prints it: the case name,
 one line per hypothesis, and the `⊢` goal highlighted.
 
+### Focus mode: the whole viewport for the proof
+
+A lesson page can be turned into an **immersive editing sheet**: the editor header's
+toggle (`⤢`, `Ctrl/Cmd+Shift+I`) or the focus bar's Exit button (`Esc`) switch it.
+In the mode the top bar, footer, breadcrumb, prose, Hint/Solution, lesson nav and the
+editor header are hidden; what stays is a slim focus bar (`✕ Exit` + lesson title), the
+statement as a one-line strip, the goals panel, the editor and the Check/Clear/Next row.
+
+- **No Fullscreen API on purpose.** iOS Safari has no element fullscreen, and there
+  `Esc` means "leave fullscreen" — which would fight the required exit key. The mode is
+  in-page, so it behaves identically everywhere.
+- **Sized from `visualViewport`,** with `100dvh` as the fallback: on iOS the layout
+  viewport does not shrink for the soft keyboard, so `--focus-h`/`--focus-top` are
+  measured on resize and scroll of the visual viewport.
+- **Degradation floors** (editor wrap 104px, editor 48px, goals panel 44px) mean a tiny
+  viewport shortens the editor rather than hiding Check, and the sheet scrolls
+  internally as a last resort.
+- The preference lives in the same `localStorage` store (`focusMode`), so it applies to
+  the next lesson too; leaving the lesson keeps the preference, `Esc` turns it off.
+
+Measured (`tests/layout.mjs`, `tests/browser-check.mjs`, plus an independent review pass):
+
+| viewport | editor, normal | editor, focus mode | notes |
+|---|---|---|---|
+| 390×844 | 178 px | **526 px** | sheet fills 844/844, `scrollBy(0,600)` moves nothing |
+| 390×480 (keyboard proxy) | — | 168 px | Check bottom 466 px, nothing clipped |
+| 320×568 | — | 294 px wide | no horizontal overflow |
+| 1280×900 | 178 px | **679 px** | infoview still side-by-side, page locked |
+
+Not verified: a real iOS device. The `visualViewport` mechanism is exercised by proxy
+(heights, a short viewport), not by an actual soft keyboard.
+
 ### Mobile-first placement
 
 | | behaviour |
