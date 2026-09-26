@@ -145,7 +145,18 @@ jobs:
             --commit-hash "${GITHUB_SHA}" \
             --commit-message "${GITHUB_SHA:0:7} by ${GITHUB_ACTOR}" \
             --commit-dirty=true | tee /tmp/deploy.log
-          url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/deploy.log | tail -1)
+          # Gate every check below on the per-deployment hostname, never on the branch
+          # alias. Wrangler's *last* pages.dev line is "Deployment alias URL", and that
+          # alias repoints minutes later — scraping it with `tail -1` handed the smoke
+          # test the previous deployment, which is how a broken deploy once passed.
+          # Anchor on the line that names this deployment, and fail closed if the scrape
+          # breaks (a wording change upstream) instead of silently falling back.
+          url=$(grep -oE 'Take a peek over at https://[a-z0-9.-]+\.pages\.dev' /tmp/deploy.log \
+            | grep -oE 'https://[a-z0-9.-]+\.pages\.dev' | tail -1 || true)
+          if [ -z "$url" ] || [ "$url" = "$SITE_URL" ]; then
+            echo "::error::could not read the per-deployment hostname from wrangler's output (got '${url:-<empty>}')"
+            exit 1
+          fi
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           {
             echo "### Deployed to Cloudflare Pages"
