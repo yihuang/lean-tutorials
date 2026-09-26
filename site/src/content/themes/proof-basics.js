@@ -22,6 +22,7 @@ This is the theme to finish first. Everything else builds on it.
     'numbers',
     'rewriting',
     'automation',
+    'advanced-tactics',
     'tools',
   ],
 };

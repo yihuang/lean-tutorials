@@ -2,25 +2,6 @@
 // pretending the material exists. `planned` entries are topics-to-be: id, title,
 // summary. They are data for later, and they render as a compact roadmap line —
 // never as links, never as progress.
-export const programVerification = {
-  id: 'program-verification',
-  status: 'planned',
-  title: 'Program verification',
-  summary: 'Specifications, invariants and refinement for real code',
-  intro: `
-Proving things *about programs* rather than about arithmetic: write down what a
-function must do, then show the implementation does exactly that — including
-termination and the parts a test suite would only sample.
-`,
-  topics: [],
-  planned: [
-    { id: 'specifications', title: 'Specifications', summary: 'Pre- and postconditions as types you can prove things about' },
-    { id: 'loop-invariants', title: 'Loop invariants', summary: 'The property that holds before, during and after every iteration' },
-    { id: 'termination', title: 'Termination', summary: 'Proving a recursion actually stops, and why Lean requires it' },
-    { id: 'refinement', title: 'Executable specs', summary: 'Keeping a fast implementation provably equal to a clear one' },
-  ],
-};
-
 export const functionalProgramming = {
   id: 'functional-programming',
   status: 'planned',
