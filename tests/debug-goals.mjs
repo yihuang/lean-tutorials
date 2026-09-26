@@ -30,9 +30,10 @@ await page.goto(`http://localhost:${port}/?mem=768`, { waitUntil: 'domcontentloa
 await page.waitForFunction(() => window.leanTutorials?.engine?.state === 'ready', null, { timeout: 900000 });
 
 const dump = await page.evaluate(async ({ lessonId, tactics }) => {
-  const { engine, LESSONS } = window.leanTutorials;
+  const LESSONS_FALLBACK = [];
+  const { engine, content } = window.leanTutorials;
   const source = await import('/src/lean/source.js');
-  const lesson = LESSONS.find((entry) => entry.id === lessonId);
+  const lesson = content.lessonById(lessonId) ?? LESSONS_FALLBACK.find((entry) => entry.id === lessonId);
   const preview = source.buildSource(lesson, tactics, { preview: true });
   const run = await engine.compile(preview.code);
   return {

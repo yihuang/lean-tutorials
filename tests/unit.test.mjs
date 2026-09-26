@@ -201,6 +201,19 @@ test('goalsFromDiagnostics reads marker-then-state traces', () => {
   assert.match(goals[0], /⊢ p$/);
 });
 
+test('goalsFromDiagnostics handles Lean merging traces that share a position', () => {
+  // Exactly what the browser runtime emits for two open goals: the markers merge
+  // into one message, and the states share the next one (no marker in it).
+  const diagnostics = [
+    { severity: 'information', kind: 'trace', message: `${GOAL_TRACE_MARKER}\n${GOAL_TRACE_MARKER}` },
+    { severity: 'information', kind: 'trace', message: 'case left\np q : Prop\nhp : p\nhq : q\n⊢ p\ncase right\np q : Prop\nhp : p\nhq : q\n⊢ q' },
+  ];
+  const goals = goalsFromDiagnostics(diagnostics, GOAL_TRACE_MARKER);
+  assert.equal(goals.length, 2);
+  assert.match(goals[0], /^case left/);
+  assert.match(goals[1], /^case right/);
+});
+
 test('goalsFromDiagnostics handles a marker merged into the state message', () => {
   const diagnostics = [
     { severity: 'information', kind: 'trace', message: `${GOAL_TRACE_MARKER}\ncase succ\nih : 0 + k = k\n⊢ 0 + (k + 1) = k + 1` },

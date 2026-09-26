@@ -240,6 +240,77 @@ textarea.editor::placeholder {
   opacity: 1;
 }
 
+/* --------------------------------------------------------------- infoview */
+
+/* Goals at the cursor. On a phone the panel sits directly above the editor —
+   the only place that stays visible once the soft keyboard is up — and is
+   height-capped and collapsible so it cannot swallow the screen. On a wide
+   screen it moves beside the editor as a sticky column instead. */
+.workbench { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+/* Grid items default to min-width:auto, so one long hypothesis would widen the
+   whole page instead of scrolling inside the panel. */
+.workbench > * { min-width: 0; }
+
+.infoview {
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); overflow: hidden;
+}
+.infoview-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 10px; background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.infoview[data-collapsed="true"] .infoview-head { border-bottom-color: transparent; }
+.infoview-head > * { min-width: 0; }
+.infoview-state { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; }
+.infoview-title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.infoview-badge {
+  flex: none; font-size: 11px; font-weight: 650; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; padding: 1px 7px;
+}
+.infoview-state .dot[data-state="goals"] { background: var(--accent); }
+.infoview-state .dot[data-state="complete"] { background: var(--ok); }
+.infoview-state .dot[data-state="error"], .infoview-state .dot[data-state="unsupported"] { background: var(--warn); }
+.infoview-spinner { flex: none; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.infoview-toggle {
+  flex: none; width: 34px; height: 30px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.infoview-body { padding: 8px; max-height: 34vh; overflow: auto; }
+.infoview[data-collapsed="true"] .infoview-body { display: none; }
+
+.goal-list { display: grid; gap: 8px; }
+.goal-card { border: 1px solid var(--line); border-radius: 10px; background: var(--code-bg); overflow: hidden; }
+.goal-head {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 3px 8px; background: var(--surface-2);
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.goal-hyps { padding: 6px 8px 0; font-family: var(--mono); font-size: 12.5px; }
+.goal-hyps .hyp { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-hyps.empty { padding-bottom: 6px; color: var(--muted); font-style: italic; }
+.goal-target {
+  padding: 5px 8px 7px; font-family: var(--mono); font-size: 13px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.goal-target .turnstile { color: var(--accent); font-weight: 700; }
+.infoview-note { margin: 0; padding: 3px 2px; font-size: 12.5px; color: var(--muted); }
+.infoview-done { display: flex; align-items: center; gap: 8px; margin: 0; padding: 4px 2px; font-size: 13px; color: var(--ok); }
+.infoview-done .check {
+  flex: none; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--ok); color: #fff; display: grid; place-items: center; font-size: 12px;
+}
+@media (prefers-color-scheme: dark) { .infoview-done .check { color: #12251a; } }
+
+@media (min-width: 900px) {
+  .workbench { grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); align-items: start; }
+  .workbench .workbench-main { order: 1; min-width: 0; }
+  .workbench .infoview { order: 2; position: sticky; top: 68px; }
+  .infoview-body { max-height: 62vh; }
+}
+
 /* --------------------------------------------------------------- controls */
 
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }

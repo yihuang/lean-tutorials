@@ -6,7 +6,8 @@ import { h } from './dom.js';
 import { expandAbbreviation, suggestAbbreviation, SYMBOL_BAR } from '../lean/unicode.js';
 
 /**
- * @param {{value?: string, placeholder?: string, rows?: number, onInput?: (value: string) => void, label?: string}} options
+ * @param {{value?: string, placeholder?: string, rows?: number, onInput?: (value: string) => void,
+ *          onCursor?: (cursor: { line: number, column: number }) => void, label?: string}} options
  */
 export function createEditor(options = {}) {
   const textarea = h('textarea', {
@@ -22,6 +23,30 @@ export function createEditor(options = {}) {
   });
 
   const emit = () => options.onInput?.(textarea.value);
+
+  const caretLine = (value, offset) => {
+    let line = 0;
+    for (let index = 0; index < offset && index < value.length; index += 1) {
+      if (value[index] === '\n') line += 1;
+    }
+    return line;
+  };
+
+  const cursor = () => ({
+    line: caretLine(textarea.value, textarea.selectionStart),
+    column: textarea.selectionStart - (textarea.value.lastIndexOf('\n', textarea.selectionStart - 1) + 1),
+  });
+
+  // The caret moves by typing, arrow keys, tapping, and selection changes — the
+  // last one only arrives as a document event, and only for the focused field.
+  const reportCursor = () => options.onCursor?.(cursor());
+  const onSelectionChange = () => {
+    if (document.activeElement === textarea) reportCursor();
+  };
+  document.addEventListener('selectionchange', onSelectionChange);
+  for (const event of ['keyup', 'click', 'focus', 'select', 'mouseup', 'touchend']) {
+    textarea.addEventListener(event, reportCursor);
+  }
 
   const insert = (text) => {
     const { selectionStart, selectionEnd, value } = textarea;
@@ -43,6 +68,7 @@ export function createEditor(options = {}) {
   textarea.addEventListener('input', () => {
     expandAbbreviation(textarea);
     emit();
+    reportCursor();
   });
 
   textarea.addEventListener('keydown', (event) => {
@@ -75,6 +101,7 @@ export function createEditor(options = {}) {
   return {
     element,
     focus: () => textarea.focus(),
+    cursor,
     get value() { return textarea.value; },
     set value(next) { textarea.value = String(next ?? ''); emit(); },
     setValue(next, { silent = true } = {}) { textarea.value = String(next ?? ''); if (!silent) emit(); },

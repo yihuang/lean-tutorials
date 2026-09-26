@@ -220,6 +220,62 @@ try {
   if (!uiOk) failures += 1;
   console.log(`${uiOk ? '✓' : '✗'} UI check: ${JSON.stringify(success)}`);
 
+  // The infoview must follow the caret: the goals at the cursor position, with
+  // their hypotheses, without any Check press.
+  const readInfoview = () => page.evaluate(() => {
+    const panel = document.querySelector('.infoview');
+    return {
+      state: panel?.dataset.state ?? 'missing',
+      title: panel?.querySelector('.infoview-title')?.textContent ?? '',
+      badge: panel?.querySelector('.infoview-badge')?.textContent ?? '',
+      goals: panel ? panel.querySelectorAll('.goal-card').length : 0,
+      hypotheses: [...document.querySelectorAll('.infoview .goal-card .hyp')].map((node) => node.textContent.trim()),
+      targets: [...document.querySelectorAll('.infoview .goal-target')].map((node) => node.textContent.replace(/\s+/g, ' ').trim()),
+    };
+  });
+  const caretTo = (line) => page.evaluate((wanted) => {
+    const textarea = document.querySelector('textarea.editor');
+    const lines = textarea.value.split('\n');
+    let offset = 0;
+    for (let index = 0; index < Math.min(wanted, lines.length); index += 1) offset += lines[index].length + 1;
+    offset += Math.min(3, (lines[Math.min(wanted, lines.length - 1)] ?? '').length);
+    textarea.focus();
+    textarea.setSelectionRange(offset, offset);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    document.dispatchEvent(new Event('selectionchange'));
+  }, line);
+
+  await page.evaluate(() => { location.hash = '#/lesson/and'; });
+  await page.waitForSelector('textarea.editor');
+  // Empty editor: the statement's own goal, so the panel is never blank.
+  await page.fill('textarea.editor', '');
+  await page.waitForFunction(() => document.querySelector('.infoview')?.dataset.state === 'goals', null, { timeout: 120000 });
+  const initial = await readInfoview();
+  const initialOk = initial.goals === 1 && /p ∧ q/.test(initial.targets[0] ?? '') && initial.hypotheses.some((h) => h.includes('hp : p'));
+  if (!initialOk) failures += 1;
+  console.log(`${initialOk ? '✓' : '✗'} infoview before typing: ${JSON.stringify(initial)}`);
+
+  // After `constructor` the two subgoals must appear, with their context.
+  await page.fill('textarea.editor', 'constructor');
+  await caretTo(0);
+  await page.waitForFunction(() => document.querySelector('.infoview')?.dataset.state === 'goals'
+    && document.querySelectorAll('.infoview .goal-card').length === 2, null, { timeout: 120000 });
+  const midProof = await readInfoview();
+  const midOk = midProof.goals === 2
+    && midProof.targets.some((t) => /⊢ p$/.test(t)) && midProof.targets.some((t) => /⊢ q$/.test(t))
+    && midProof.hypotheses.filter((h) => h === 'hq : q').length === 2;
+  if (!midOk) failures += 1;
+  console.log(`${midOk ? '✓' : '✗'} infoview at the cursor: ${JSON.stringify(midProof)}`);
+
+  // Finishing the proof must flip the same panel to "complete", no Check press.
+  await page.fill('textarea.editor', 'exact ⟨hp, hq⟩');
+  await caretTo(0);
+  await page.waitForFunction(() => document.querySelector('.infoview')?.dataset.state === 'complete', null, { timeout: 120000 });
+  const finished = await readInfoview();
+  const finishedOk = finished.goals === 0 && /complete/i.test(finished.badge);
+  if (!finishedOk) failures += 1;
+  console.log(`${finishedOk ? '✓' : '✗'} infoview at the end of a finished proof: ${JSON.stringify(finished)}`);
+
   // A file lesson (kind 'file'): the output panel must show what Lean printed,
   // and the verdict must not claim a proof was verified.
   await page.evaluate(() => { location.hash = '#/lesson/check'; });

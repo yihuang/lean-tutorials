@@ -68,6 +68,13 @@ const CONTRAST = `
     '<div class="result ok"><span class="check">✓</span><span><strong class="result-title">Proof verified</strong>' +
       '<span class="result-detail">kernel-checked</span></span></div>',
     '<span class="next-chip">next</span>',
+    '<section class="infoview" data-state="goals"><div class="infoview-head">' +
+      '<span class="infoview-state"><span class="infoview-title">Goals at line 3</span>' +
+      '<span class="infoview-badge">2 open</span></span></div><div class="infoview-body">' +
+      '<div class="goal-card"><div class="goal-head"><span class="goal-name">left</span>' +
+      '<span class="goal-index">1/2</span></div><div class="goal-hyps"><span class="hyp">hp : p</span></div>' +
+      '<div class="goal-target"><span class="turnstile">⊢</span> p</div></div>' +
+      '<p class="infoview-note">showing the last complete step</p></div></section>',
     '<div class="topic-card"><a class="topic-head" href="#/"><span class="topic-meta">' +
       '<span class="topic-title">Topic title</span><span class="topic-sub">topic summary</span></span>' +
       '<span class="topic-count">2/5</span></a><p class="topic-next small muted">Next: <a href="#/">lesson</a></p></div>',
@@ -79,6 +86,7 @@ const CONTRAST = `
     '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
     '.result.ok .result-title', '.result.ok .result-detail', '.next-chip',
     '.topic-title', '.topic-sub', '.topic-count', '.topic-next a',
+    '.infoview-title', '.infoview-badge', '.goal-hyps .hyp', '.goal-target', '.goal-name', '.infoview-note',
   ])}) {
     const [selector, pseudo] = raw.split('::');
     const element = document.querySelector(selector);

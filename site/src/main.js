@@ -5,6 +5,7 @@
 // lessons, and the two lesson kinds the content contract defines.
 
 import { LeanEngine } from './lean/engine.js';
+import { GoalProbe } from './lean/infoview.js';
 import { checkLesson } from './lean/tutorial.js';
 import { locate, parseOutput } from './lean/diagnostics.js';
 import {
@@ -12,6 +13,7 @@ import {
   previousLesson, topicById, topicOfLesson, topicProgress, totalProgress,
 } from './content/index.js';
 import { createEditor } from './ui/editor.js';
+import { createInfoviewPanel } from './ui/infoview-panel.js';
 import { clear, h } from './ui/dom.js';
 import { inlineProse, prose } from './ui/prose.js';
 
@@ -38,9 +40,10 @@ function loadStore() {
       solved: parsed.solved && typeof parsed.solved === 'object' ? parsed.solved : {},
       drafts: parsed.drafts && typeof parsed.drafts === 'object' ? parsed.drafts : {},
       sandbox: typeof parsed.sandbox === 'string' ? parsed.sandbox : '',
+      infoviewCollapsed: Boolean(parsed.infoviewCollapsed),
     };
   } catch {
-    return { solved: {}, drafts: {}, sandbox: '' };
+    return { solved: {}, drafts: {}, sandbox: '', infoviewCollapsed: false };
   }
 }
 
@@ -52,6 +55,10 @@ const isSolved = (id) => Boolean(store.solved[id]);
 
 const engine = new LeanEngine();
 engine.start().catch(() => { /* surfaced through engine.state */ });
+
+// Cursor-driven goals. One instance: its cache is keyed by lesson id, and the
+// engine already serialises compiles.
+const goalProbe = new GoalProbe(engine, { maxBackoff: 3, cacheSize: 32 });
 
 const STATE_TEXT = {
   idle: 'Starting Lean…',
@@ -119,6 +126,7 @@ function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [section, param] = hash.split('/');
   clear(main);
+  goalProbe.cancel();
   statusPanel.style.display = 'none';
   syncUi = () => {};
   if (section === 'topic' && topicById(param)) renderTopic(topicById(param));
@@ -271,11 +279,37 @@ function renderLesson(lesson) {
   main.append(prose(lesson.intro));
 
   const feedback = h('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
+  const infoview = createInfoviewPanel({
+    collapsed: store.infoviewCollapsed,
+    label: isFile ? 'Output' : 'Goals and assumptions at the cursor',
+    onToggle: (collapsed) => { store.infoviewCollapsed = collapsed; saveStore(); },
+  });
+
+  // Probes are debounced and token-checked: a stale answer must not paint over a
+  // newer one, and typing must not queue a compile per keystroke.
+  let probeToken = 0;
+  let probeTimer = null;
+  const scheduleProbe = ({ immediate = false } = {}) => {
+    window.clearTimeout(probeTimer);
+    const token = ++probeToken;
+    const run = async () => {
+      if (token !== probeToken) return;
+      if (engine.state !== 'ready') return; // the engine subscription re-probes on ready
+      infoview.update(null, { busy: true });
+      const result = await goalProbe.goalsAt(lesson, input, editor.cursor().line);
+      if (token !== probeToken) return;
+      infoview.update(result, { busy: false });
+    };
+    if (immediate) run();
+    else probeTimer = window.setTimeout(run, 320);
+  };
+
   const editor = createEditor({
     value: input,
     placeholder: lesson.placeholder,
     rows: isFile ? 10 : 6,
     label: isFile ? 'Your Lean file' : 'Your tactic block',
+    onCursor: () => scheduleProbe(),
     onInput: (value) => {
       input = value;
       if (value) store.drafts[lesson.id] = value;
@@ -284,6 +318,7 @@ function renderLesson(lesson) {
       // Editing after a success means the verified answer is no longer on screen;
       // the solved lesson and its way onward stay marked.
       if (verified) { verified = false; clear(feedback); syncButtons(); }
+      scheduleProbe();
     },
   });
 
@@ -321,8 +356,9 @@ function renderLesson(lesson) {
       ? h('p', { class: 'small muted' }, inlineProse(
         'This one is a whole file: commands like `#check`, `#eval` and `def` are allowed, and the output appears below.'))
       : h('pre', { class: 'statement' }, h('span', { class: 'lbl', text: '⊢ ' }), lesson.statement),
-    editor.element,
-    actions);
+    h('div', { class: 'workbench' },
+      infoview.element,
+      h('div', { class: 'workbench-main' }, editor.element, actions)));
   main.append(card);
 
   main.append(h('details', { class: 'hint', style: 'margin-top:12px' },
@@ -433,8 +469,9 @@ function renderFeedback(container, result, lesson) {
   }
 
   if (result.goals?.length) {
-    container.append(h('p', { class: 'eyebrow', text: result.goals.length === 1 ? 'Open goal' : 'Open goals' }));
-    container.append(h('div', { class: 'goals' }, result.goals.map((goal) => h('pre', { class: 'goal', text: goal }))));
+    container.append(h('p', { class: 'small muted', text: result.goals.length === 1
+      ? 'One goal is still open — see the goals panel for its hypotheses.'
+      : `${result.goals.length} goals are still open — see the goals panel.` }));
   }
 
   const messages = (result.messages ?? []).filter((message) => message.severity !== 'information' || message.message.trim());

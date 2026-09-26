@@ -57,13 +57,19 @@ await phone.waitForSelector('.result.ok');
 await phone.waitForTimeout(200);
 await phone.screenshot({ path: join(out, 'mobile-file-lesson.png'), fullPage: true });
 
-// A stuck learner: two open goals with their context.
+// A stuck learner: the infoview shows both open goals at the cursor, live.
 await phone.evaluate(() => { location.hash = '#/lesson/and'; });
 await phone.waitForSelector('textarea.editor');
 await phone.fill('textarea.editor', 'constructor');
-await phone.click('button.btn.primary');
-await phone.waitForSelector('.goals .goal');
+await phone.waitForFunction(() => document.querySelectorAll('.infoview .goal-card').length === 2, null, { timeout: 120000 });
 await phone.waitForTimeout(300);
+await phone.screenshot({ path: join(out, 'mobile-infoview.png'), fullPage: true });
+
+// ...and checking still shows the verdict: the goal text itself lives in the
+// infoview now, so the feedback only carries the messages.
+await phone.click('.actions .btn.primary');
+await phone.waitForSelector('.banner.err');
+await phone.waitForTimeout(200);
 await phone.screenshot({ path: join(out, 'mobile-open-goals.png'), fullPage: true });
 
 // A finished lesson.
@@ -84,6 +90,13 @@ await phone.screenshot({ path: join(out, 'mobile-engine-panel.png'), fullPage: t
 await phone.close();
 
 const wide = await boot(1280, 900);
+await wide.evaluate(() => { location.hash = '#/lesson/and'; });
+await wide.waitForSelector('textarea.editor');
+await wide.fill('textarea.editor', 'constructor');
+await wide.waitForFunction(() => document.querySelectorAll('.infoview .goal-card').length === 2, null, { timeout: 120000 });
+await wide.waitForTimeout(300);
+await wide.screenshot({ path: join(out, 'desktop-infoview.png'), fullPage: true });
+
 await wide.evaluate(() => { location.hash = '#/lesson/induction'; });
 await wide.waitForSelector('textarea.editor');
 await wide.waitForTimeout(300);

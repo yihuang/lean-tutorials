@@ -121,6 +121,51 @@ const panel = await page.evaluate(() => {
 });
 check(panel.visible && panel.text.length > 30, 'lesson: engine chip opens the status panel', panel.text.slice(0, 70));
 
+// The infoview: above the editor on a phone, height-capped, collapsible, and it
+// must not introduce horizontal overflow however long a hypothesis is.
+const infoview = await page.evaluate(() => {
+  const panel = document.querySelector('.infoview');
+  const editor = document.querySelector('textarea.editor');
+  const body = document.querySelector('.infoview-body');
+  return {
+    present: Boolean(panel),
+    aboveEditor: Boolean(panel) && panel.getBoundingClientRect().bottom <= editor.getBoundingClientRect().top + 1,
+    role: panel?.getAttribute('role') ?? '',
+    label: panel?.getAttribute('aria-label') ?? '',
+    bodyHeight: body ? Math.round(body.getBoundingClientRect().height) : 0,
+    viewport: window.innerHeight,
+    collapsed: panel?.dataset.collapsed ?? '',
+    toggleLabel: document.querySelector('.infoview-toggle')?.getAttribute('aria-expanded') ?? '',
+  };
+});
+check(infoview.present && infoview.aboveEditor, 'infoview sits directly above the editor on a phone');
+check(infoview.role === 'region' && infoview.label.length > 5, 'infoview is a labelled region', infoview.label);
+check(infoview.bodyHeight > 0 && infoview.bodyHeight <= infoview.viewport * 0.4, 'infoview is height-capped', `${infoview.bodyHeight}px of ${infoview.viewport}px`);
+
+await page.click('.infoview-toggle');
+const collapsedState = await page.evaluate(() => ({
+  collapsed: document.querySelector('.infoview')?.dataset.collapsed,
+  expanded: document.querySelector('.infoview-toggle')?.getAttribute('aria-expanded'),
+  bodyHidden: getComputedStyle(document.querySelector('.infoview-body')).display === 'none',
+  headerVisible: document.querySelector('.infoview-head').getBoundingClientRect().height > 0,
+}));
+check(collapsedState.collapsed === 'true' && collapsedState.bodyHidden && collapsedState.headerVisible,
+  'infoview collapses to its header', JSON.stringify(collapsedState));
+
+// A long hypothesis must wrap, not widen the page.
+const longHyp = await page.evaluate(async () => {
+  const panel = document.querySelector('.infoview');
+  panel.dataset.collapsed = 'false';
+  const body = panel.querySelector('.infoview-body');
+  body.innerHTML = '<div class="goal-card"><div class="goal-hyps">' +
+    '<span class="hyp">h : ' + 'x'.repeat(120) + '.repeat(6)</span></div>' +
+    '<div class="goal-target"><span class="turnstile">⊢</span> ' + 'y'.repeat(120) + '</div></div>';
+  return { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth };
+});
+check(longHyp.scrollWidth <= longHyp.clientWidth + 1, 'infoview wraps long hypotheses instead of widening the page',
+  `${longHyp.scrollWidth}px of ${longHyp.clientWidth}px`);
+await page.click('.infoview-toggle');
+
 // A lesson already in the solved set must show the way onward straight away
 // (seeded before the app reads storage, so no proof has to run).
 const solvedPage = await context.newPage();

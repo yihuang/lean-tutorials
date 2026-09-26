@@ -46,7 +46,12 @@ export function goalsFromDiagnostics(diagnostics, marker) {
     if (diagnostic.raw || !isTrace(diagnostic)) continue;
     const message = diagnostic.message.trim();
     let payload = null;
-    const markerIndex = message.indexOf(marker);
+    // Use the LAST marker in the message. Lean merges traces that share a source
+    // position, so two open goals arrive as `"<marker>\n<marker>"` followed by a
+    // single message holding both `case …` blocks — splitting on the first marker
+    // would leave the marker itself as the "state" and lose every goal, and the
+    // trace pass would report a still-open proof as complete.
+    const markerIndex = message.lastIndexOf(marker);
     if (markerIndex >= 0) {
       const rest = message.slice(markerIndex + marker.length).trim();
       if (!rest) { armed = true; continue; }

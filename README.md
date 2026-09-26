@@ -27,6 +27,8 @@ site/
   src/lean/tutorial.js       the two-pass "Check" (errors + open goals)
   src/lean/diagnostics.js    JSON diagnostics → learner line numbers
   src/lean/goals.js          turn `trace_state` output into goal panels
+  src/lean/infoview.js       cursor probe: the goals at the caret
+  src/ui/infoview-panel.js   renders a probe result (cases, hypotheses, ⊢ goal)
   src/lean/unicode.js        Lean unicode abbreviations + symbol bar
   src/content/               the course: topics + lessons (data only)
   src/ui/                    editor, prose, DOM helpers
@@ -257,6 +259,56 @@ The Lean WASM build and the packed core library are redistributed here from
 as `site/UPSTREAM-LICENSE-Apache-2.0.txt` and the credit is in the site footer.
 The binaries are not committed — `npm run prepare:runtime` fetches the pinned
 release and verifies its hashes.
+
+## The infoview: goals at the cursor
+
+A language server answers "what is true at this position?" by elaborating a
+prefix of the file and reading the goals out of the info tree. There is no server
+here, but the same question can be answered with what the browser runtime gives
+us: **elaborate the learner's lines 0..cursor with the goal-tracing wrapper and
+parse the traces.**
+
+```
+cursor line 1 of:
+    constructor          → probe compiles `… := by` + line 0 + wrapper
+    exact ⟨hp, hq⟩         → traces every open goal, then closes them with an axiom
+                          → parse `<marker>` + `trace_state` pairs → 2 goals (⊢ p, ⊢ q)
+```
+
+- `site/src/lean/infoview.js` — `new GoalProbe(engine).goalsAt(lesson, input, cursorLine)`.
+  Mechanism only: no DOM, no content import. It reports
+  `status: goals | complete | error | unsupported | stale`, the goals themselves,
+  and `line` — the line the state really belongs to.
+- **Back-off.** A cursor inside a multi-line tactic (`induction … with`, `calc`, a
+  `·` bullet) truncates the tactic itself and Lean rejects the file, so the probe
+  retries one line earlier until something elaborates and says so in the panel.
+- **Empty editor or `cursorLine: -1`** probes with no tactics at all, which yields
+  the statement's own goal — so the panel shows what must be proved before the
+  learner has typed anything.
+- **Cost control.** Results are cached by lesson + line + text, probes are
+  debounced (~320 ms) and token-checked in the UI, and a newer cursor position
+  makes an older probe resolve as `stale` *before* it queues another compile, so
+  typing never builds a backlog.
+- **File lessons** return `unsupported` (a `#check`/`#eval` file has no goals); the
+  output panel is their infoview.
+
+`site/src/ui/infoview-panel.js` renders a result as Lean prints it: the case name,
+one line per hypothesis, and the `⊢` goal highlighted.
+
+### Mobile-first placement
+
+| | behaviour |
+|---|---|
+| phones (<900 px) | the panel sits **directly above the editor** — the only spot that stays visible with the soft keyboard up — capped at `34vh` with its own scroll, and collapsible to its header (the choice is remembered in `localStorage`) |
+| wide screens (≥900 px) | the same element moves to a **sticky second column** beside the editor (`62vh` cap) — no duplicate DOM, just a grid `order` |
+
+Long hypotheses wrap (`overflow-wrap: anywhere`) instead of widening the page,
+which `tests/layout.mjs` asserts by injecting a 700-character hypothesis.
+
+`npm run test:e2e` proves the whole loop against the real runtime: the panel shows
+the statement's goal before any input, both subgoals with their context after
+`constructor`, and flips to "complete" when the proof is finished — all without
+pressing Check.
 
 ## Course structure: content vs mechanism
 

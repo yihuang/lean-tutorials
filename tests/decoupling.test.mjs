@@ -36,7 +36,7 @@ test('content never imports the mechanism', () => {
 });
 
 test('the mechanism reaches content only through content/index.js', () => {
-  const mechanism = ['lean/engine.js', 'lean/tutorial.js', 'lean/source.js', 'lean/packs.js', 'lean/diagnostics.js', 'lean/goals.js', 'ui/editor.js', 'ui/dom.js', 'ui/prose.js', 'main.js'];
+  const mechanism = ['lean/engine.js', 'lean/tutorial.js', 'lean/source.js', 'lean/packs.js', 'lean/diagnostics.js', 'lean/goals.js', 'lean/infoview.js', 'ui/editor.js', 'ui/dom.js', 'ui/prose.js', 'ui/infoview-panel.js', 'main.js'];
   for (const name of mechanism) {
     const file = join(src, name);
     const bad = importsOf(file).filter((spec) => /content\/topics\//.test(spec) || /content\/sandbox/.test(spec));
@@ -48,7 +48,7 @@ test('the mechanism never branches on a lesson id', () => {
   // A quoted word that happens to match an id (a CSS class, say) is fine; what
   // would break the boundary is comparing against one.
   const ids = LESSONS.map((lesson) => lesson.id);
-  const mechanism = ['lean/tutorial.js', 'lean/source.js', 'main.js'];
+  const mechanism = ['lean/tutorial.js', 'lean/source.js', 'lean/infoview.js', 'ui/infoview-panel.js', 'main.js'];
   for (const name of mechanism) {
     const text = readFileSync(join(src, name), 'utf8');
     const comparisons = ids.flatMap((id) => {
