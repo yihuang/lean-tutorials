@@ -126,7 +126,7 @@ async function loadWasmChunks({ base, query, chunks, bytes }) {
     self.postMessage({ type: 'wasm_progress', loaded: offset, total: bytes, downloaded, cached });
   }
   if (offset !== bytes) throw new Error(`runtime chunks are incomplete (${offset} of ${bytes} bytes)`);
-  assembledWasm = buffer;
+  assembledWasm = buffer.buffer;
   console.log(`[WASM] assembled ${bytes} bytes from ${chunks.length} chunks in ${(performance.now() - started).toFixed(0)}ms`);
   self.postMessage({ type: 'wasm_ready', bytes, chunks: chunks.length, downloaded, cached });
 }
@@ -277,9 +277,24 @@ async function loadSnapshot(name, url) {
 }
 
 function startLeanModule() {
+  // Emscripten's glue fetches `locateFile('lean.wasm')` and instantiates it as a
+  // stream. This fork's loader only *checks* Module.wasmBinary for truthiness and
+  // then reads through its own synchronous-XHR `readBinary`, so the binary has to be
+  // handed over at the fetch itself: answer that one URL from memory. The glue's
+  // normal streaming path then works unchanged, no copy of the 96 MB is made, and a
+  // missing chunk is a loud error instead of a silent fetch of an HTML 404 page.
+  const servedFetch = self.fetch;
+  self.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url ?? '';
+    if (assembledWasm && /\/lean\.wasm(\?|$)/.test(url)) {
+      return Promise.resolve(new Response(assembledWasm, {
+        headers: { 'content-type': 'application/wasm' },
+      }));
+    }
+    return servedFetch(input, init);
+  };
+
   self.Module = {
-    // Hand over the assembled binary: Emscripten then skips its own fetch, which is
-    // the whole reason this works without a server-side Function.
     wasmBinary: assembledWasm,
     // Supply the device's initial allocation and maximum to the growable runtime.
     ...(function () { const p = pickWasmMemory(); return p ? { wasmMemory: p.memory, INITIAL_MEMORY: p.bytes } : {}; })(),

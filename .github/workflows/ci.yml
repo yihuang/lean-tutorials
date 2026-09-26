@@ -200,8 +200,12 @@ jobs:
 
           # The branch alias keeps serving the previous deployment for a while, so
           # retry until it is the one we just shipped: the Function must answer.
+          # The branch alias keeps answering from the previous deployment for a
+          # couple of minutes after a deploy, so this window is deliberately wide:
+          # the deployment itself was already verified above, and this step exists
+          # to catch the case where the alias never picks the new deployment up.
           ok=false
-          for attempt in 1 2 3 4 5 6; do
+          for attempt in $(seq 1 14); do
             echo "--- attempt $attempt ---"
             if [ "$(status "$url/")" != "200" ]; then echo "index -> $(status "$url/")"; sleep 10; continue; fi
             headers=$(curl -sI "$url/")

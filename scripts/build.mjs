@@ -20,6 +20,10 @@ import { fileURLToPath } from 'node:url';
 import { LEAN_ASSET_VERSION } from '../site/src/lean/config.js';
 
 const CHUNK_BYTES = 20 * 1024 * 1024; // Pages rejects files over 25 MB, so 20 MB + headroom
+// The fetched runtime, as scripts/fetch-runtime.mjs leaves it. It is a chunk name on
+// purpose: `lean.wasm` must never exist, or Emscripten's fetch fallback would hide a
+// broken assembly path locally (see the note in that script).
+const WASM_SOURCE = 'lean.wasm.chunk-000';
 const RELEASE_TAG = 'runtime-62b6a22-compact1';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,7 +38,7 @@ function fail(message) {
   process.exit(1);
 }
 
-for (const required of ['lean.js', 'lean.wasm', 'core-layer.json', 'core-lib']) {
+for (const required of ['lean.js', WASM_SOURCE, 'core-layer.json', 'core-lib']) {
   if (!existsSync(join(runtimeSrc, required))) fail(`site/lean-wasm/${required} is missing`);
 }
 
@@ -55,7 +59,7 @@ cpSync(join(runtimeSrc, 'core-layer.json'), join(runtimeOut, 'core-layer.json'))
 cpSync(join(runtimeSrc, 'core-lib'), join(runtimeOut, 'core-lib'), { recursive: true });
 
 // 3. lean.wasm, split deterministically into chunks.
-const wasm = readFileSync(join(runtimeSrc, 'lean.wasm'));
+const wasm = readFileSync(join(runtimeSrc, WASM_SOURCE));
 const chunks = [];
 for (let offset = 0, index = 0; offset < wasm.length; offset += CHUNK_BYTES, index += 1) {
   const name = `lean.wasm.part-${String(index).padStart(3, '0')}`;

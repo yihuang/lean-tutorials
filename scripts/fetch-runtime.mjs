@@ -28,7 +28,7 @@
 //   site/lean-wasm/lib/lean/**        the Init .olean/.ir/.ir.sig closure, which
 //                                     scripts/pack-core-layer.mjs packs up
 import { createHash } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -117,11 +117,13 @@ for (const [name, expected] of Object.entries(FILES[variant])) {
   console.log(`✓ ${name}  ${(size / 1048576).toFixed(1)} MB  ${digest.slice(0, 16)}…`);
 }
 
-// A manifest for the dev tree, where the runtime is the whole lean.wasm file rather
-// than the <25 MB chunks the Pages build splits it into (scripts/build.mjs writes
-// the chunked one into dist/). Without it `npm run dev` cannot describe the runtime
-// to the worker.
-const wasmPath = join(runtimeDir, 'lean.wasm');
+// The dev tree ships the whole binary as one chunk, but *not* under the name
+// `lean.wasm`: Emscripten falls back to fetching `lean.wasm` when handed no binary,
+// and that fallback worked locally while the deployed site had no such file — which
+// is how a broken assembly path passed the local suite. Naming it as a chunk means
+// the local run exercises exactly what production does.
+const wasmPath = join(runtimeDir, 'lean.wasm.chunk-000');
+renameSync(join(runtimeDir, 'lean.wasm'), wasmPath);
 writeFileSync(join(runtimeDir, 'runtime.json'), `${JSON.stringify({
   release: RELEASE_TAG,
   variant,
@@ -130,10 +132,10 @@ writeFileSync(join(runtimeDir, 'runtime.json'), `${JSON.stringify({
     bytes: statSync(wasmPath).size,
     sha256: sha256(wasmPath),
     chunkBytes: null,
-    chunks: ['lean.wasm'],
+    chunks: ['lean.wasm.chunk-000'],
   },
 }, null, 1)}\n`);
-console.log(`wrote site/lean-wasm/runtime.json (single-file manifest for dev)`);
+console.log('wrote site/lean-wasm/{runtime.json,lean.wasm.chunk-000} (single-chunk dev layout)');
 
 if (!LEAN_ASSET_VERSION.startsWith('62b6a22913')) {
   throw new Error(`site/src/lean/config.js pins ${LEAN_ASSET_VERSION}, but this script fetches runtime-62b6a22-compact1`);
