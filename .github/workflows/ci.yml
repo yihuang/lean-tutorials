@@ -99,16 +99,16 @@ jobs:
         run: node tests/browser-check.mjs --mem 2048 --fresh
 
   deploy:
-    name: deploy to Cloudflare Pages
+    name: deploy (${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }})
     needs: [unit, browser]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
-      # Always gate on the stable production hostname. The per-deployment alias
-      # (https://<hash>.lean-tutorials.pages.dev) takes a minute or two to get its
-      # certificate, so smoke-testing it right after a deploy fails on a deploy
-      # that is actually fine.
-      SITE_URL: https://lean-tutorials.pages.dev
+      # main -> production; any other branch -> https://<branch>.lean-tutorials.pages.dev,
+      # which is stable per branch and never touches production. Slashes become
+      # dashes because a Pages hostname cannot contain one.
+      SITE_URL: ${{ github.ref == 'refs/heads/main' && 'https://lean-tutorials.pages.dev' || format('https://{0}.lean-tutorials.pages.dev', github.ref_name) }}
+      SITE_BRANCH: ${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -135,9 +135,10 @@ jobs:
             echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID repository secrets are not set"
             exit 1
           fi
+          branch=$(printf '%s' "$SITE_BRANCH" | tr '/' '-')
           npx --yes wrangler@4 pages deploy dist \
             --project-name lean-tutorials \
-            --branch main \
+            --branch "$branch" \
             --commit-hash "${GITHUB_SHA}" \
             --commit-message "${GITHUB_SHA:0:7} by ${GITHUB_ACTOR}" \
             --commit-dirty=true | tee /tmp/deploy.log
@@ -146,20 +147,46 @@ jobs:
           {
             echo "### Deployed to Cloudflare Pages"
             echo
-            echo "- production: $SITE_URL"
+            echo "- site: $SITE_URL"
             echo "- this deployment: ${url}"
             echo "- commit: \`${GITHUB_SHA:0:7}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Smoke test the deployment
+      - name: Smoke test the deployment itself
+        run: |
+          set -euo pipefail
+          url="${{ steps.deploy.outputs.url }}"
+          test -n "$url" || { echo "::error::no deployment URL"; exit 1; }
+          status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
+
+          # The per-deployment hostname gets its certificate a minute or two after
+          # the deploy, so retry rather than declaring a healthy deploy broken.
+          ready=false
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if [ "$(status "$url/")" = "200" ]; then ready=true; break; fi
+            echo "attempt $attempt: $(status "$url/") — retrying"
+            sleep 15
+          done
+          if [ "$ready" != "true" ]; then echo "::error::$url never became ready"; exit 1; fi
+
+          # The runtime Function is the part that has silently broken before: it
+          # must answer, and it must reject an invalid ?v= with 400 rather than
+          # falling through to a 404 page.
+          code=$(status "$url/lean-wasm/lean.wasm?v=../x")
+          [ "$code" = "400" ] || { echo "::error::the runtime Function is not handling /lean-wasm/lean.wasm (invalid ?v= returned $code, expected 400)"; exit 1; }
+          code=$(status "$url/lean-wasm/lean.wasm")
+          [ "$code" = "200" ] || { echo "::error::the runtime Function did not serve lean.wasm ($code)"; exit 1; }
+          curl -sf --max-time 90 -o /dev/null "$url/lean-wasm/core-layer.json" || { echo "::error::core-layer.json is missing"; exit 1; }
+          echo "deployment smoke test passed for $url"
+
+      - name: Smoke test the branch alias
         run: |
           set -euo pipefail
           url="$SITE_URL"
           status() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1"; }
 
-          # A brand-new deployment takes a moment to answer everywhere (cold
-          # Function start, edge propagation), and so does a new 404.html, so each
-          # assertion is retried as a set instead of firing once.
+          # The branch alias keeps serving the previous deployment for a while, so
+          # retry until it is the one we just shipped: the Function must answer.
           ok=false
           for attempt in 1 2 3 4 5 6; do
             echo "--- attempt $attempt ---"
