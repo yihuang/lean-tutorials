@@ -110,9 +110,11 @@ function renderStatusPanel() {
       ? `This visit: 0 MB downloaded, ${mb(cached)} of Lean core served from the browser cache.`
       : `This visit: ${mb(downloaded)} downloaded, ${mb(cached)} from cache. The next visit downloads nothing.` }));
   }
-  statusPanel.append(h('p', { class: 'small muted', text:
-    'First visit downloads the runtime (~47 MB compressed) and the Lean core library; both are cached by the browser, ' +
-    'so reloads and later visits transfer nothing but a few KB of revalidation. Nothing you type leaves the device.' }));
+  statusPanel.append(h('p', { class: 'small muted' }, inlineProse(
+    'First visit downloads the runtime (~47 MB compressed) and the Lean core library; the browser caches both, so ' +
+    'reloads transfer only a few KB of revalidation. What still takes time on every load is *compiling* the ' +
+    'WebAssembly — that work cannot be cached across page loads, which is why a cold start is not instant. ' +
+    'Nothing you type leaves the device.')));
 }
 
 chip.addEventListener('click', () => {

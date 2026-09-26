@@ -33,6 +33,13 @@ export class LeanEngine {
     this.state = 'idle';
     /** @type {{message: string, percent: number|null, detail?: string}} */
     this.progress = { message: 'Starting Lean…', percent: null };
+    // The current phase, and a ticking clock for it: a page load that spends ~15 s
+    // compiling WebAssembly must look alive, or it reads as a hang.
+    this._phase = null;
+    this._phaseMessage = '';
+    this._phaseStarted = 0;
+    this._ticker = null;
+    this._packProgress = null;
     /** @type {Error|null} */
     this.error = null;
     /** @type {Worker|null} */
@@ -44,6 +51,9 @@ export class LeanEngine {
     // What this visit cost over the network: the packed core is fetched from the
     // page, so resource timing tells us cache hit vs download exactly.
     this.networkBytes = { downloaded: 0, cached: 0 };
+    // Phase timeline, so the slow part of a page load is measurable instead of
+    // guessed. Entries are { phase, at } with `at` in ms since the engine started.
+    this.timeline = [];
     this.booted = false;
     this._booting = null;
     this._queue = Promise.resolve();
@@ -60,6 +70,11 @@ export class LeanEngine {
     for (const listener of this.listeners) listener(this);
   }
 
+  _mark(phase) {
+    if (!this._t0) this._t0 = performance.now();
+    this.timeline.push({ phase, at: Math.round(performance.now() - this._t0) });
+  }
+
   _setState(state, message) {
     this.state = state;
     if (message) this.progress = { message, percent: this.progress.percent };
@@ -67,8 +82,70 @@ export class LeanEngine {
   }
 
   _setProgress(message, percent, detail) {
-    this.progress = { message, percent, detail };
+    this._phaseMessage = message;
+    this.progress = { message: this._withElapsed(message), percent, detail: detail ?? this.progress.detail };
     this._emit();
+  }
+
+  _withElapsed(message) {
+    if (!this._phaseStarted || this.state === 'ready' || this.state === 'error') return message;
+    const seconds = Math.floor((performance.now() - this._phaseStarted) / 1000);
+    return seconds >= 1 ? `${message} · ${seconds}s` : message;
+  }
+
+  _setPhase(phase, message) {
+    this._phase = phase;
+    this._phaseStarted = performance.now();
+    this._setProgress(message, this.progress.percent);
+    if (this._ticker) return;
+    this._ticker = setInterval(() => {
+      if (!this._phase) return;
+      this.progress = { ...this.progress, message: this._withElapsed(this._phaseMessage) };
+      this._emit();
+    }, 1000);
+  }
+
+  _stopTicker() {
+    if (this._ticker) clearInterval(this._ticker);
+    this._ticker = null;
+    this._phase = null;
+  }
+
+  /** Human summary of where the cold start went, using the phase timeline. */
+  _startupDetail() {
+    const at = Object.fromEntries(this.timeline.map((mark) => [mark.phase, mark.at]));
+    const seconds = (from, to) => (from !== undefined && to !== undefined ? ((to - from) / 1000).toFixed(1) : null);
+    const wasm = seconds(at['worker-script'], at['wasm-ready']);
+    const staging = seconds(at['wasm-ready'], at['packs-staged']);
+    const importing = seconds(at['packs-staged'], at.ready);
+    const { downloaded } = this.networkBytes;
+    const parts = [
+      wasm && `WebAssembly compile ${wasm}s`,
+      staging && `core library ${staging}s`,
+      importing && `Init import ${importing}s`,
+    ].filter(Boolean);
+    return [
+      `Started in ${((at.ready ?? 0) / 1000).toFixed(1)}s: ${parts.join(', ')}.`,
+      downloaded === 0
+        ? 'Nothing was downloaded this visit — the runtime came from the browser cache.'
+        : `${(downloaded / 1048576).toFixed(1)} MB downloaded, cached for next time.`,
+      'The WebAssembly compile itself happens on every page load.',
+    ].join(' ');
+  }
+
+  /** While staging owns the message, say honestly whether bytes are moving. */
+  _reportPackProgress() {
+    const pack = this._packProgress;
+    if (!pack) return;
+    const mb = (bytes) => (bytes / 1048576).toFixed(1);
+    const cached = (pack.downloadedBytes ?? 0) === 0;
+    this._setProgress(
+      cached
+        ? `Unpacking the cached Lean core (pack ${pack.index + 1} of ${pack.count})`
+        : `Downloading the Lean core library (${mb(pack.received)}/${mb(pack.total)} MB)`,
+      8 + Math.round((pack.received / pack.total) * 52),
+      `pack ${pack.index + 1} of ${pack.count}, ${cached ? 'from the browser cache' : 'from the network'}`,
+    );
   }
 
   /** Boot the runtime. Safe to call repeatedly; only the first call does work. */
@@ -82,7 +159,9 @@ export class LeanEngine {
   }
 
   async _boot() {
-    this._setState('booting', 'Starting Lean runtime…');
+    this._mark('boot');
+    this.state = 'booting';
+    this._setPhase('booting', 'Starting the Lean runtime (compiling WebAssembly)');
     // Fail loudly if a runtime file is missing, or if something in between is
     // serving HTML where wasm should be (captive portals, corporate proxies,
     // aggressive filters). Without this, Emscripten reports "expected magic
@@ -110,32 +189,35 @@ export class LeanEngine {
     // overlap with the ~25 MB (`lean.js` + `lean.wasm`) runtime download.
     const packs = corePackStream(({ index, count, received, total, downloadedBytes, cachedBytes }) => {
       this.networkBytes = { downloaded: downloadedBytes, cached: cachedBytes };
-      if (this.state === 'staging' || this.state === 'booting') {
-        this._setProgress(
-          `Downloading the Lean core library (${Math.round(received / 1048576)}/${Math.round(total / 1048576)} MB)`,
-          8 + Math.round((received / total) * 52),
-          `pack ${index + 1} of ${count}`,
-        );
-      }
+      this._packProgress = { index, count, received, total, downloadedBytes };
+      // Only staging reports pack numbers: during the compile that text would sit
+      // frozen and read as a stalled download.
+      if (this.state === 'staging') this._reportPackProgress();
     });
     const firstPack = packs.next();
 
     await this._startWorker();
-    this._setState('staging', 'Loading the Lean core library…');
+    this.state = 'staging';
+    this._setPhase('staging', 'Loading the Lean core library');
+    this._reportPackProgress();
 
     for (let step = await firstPack; !step.done; step = await packs.next()) {
       await this._stagePack(step.value);
+      this._mark(`pack ${step.value.file}`);
     }
 
-    this._setState('importing', 'Importing Lean core (first run only)…');
+    this._mark('packs-staged');
+    this.state = 'importing';
+    this._setPhase('importing', 'Importing the Lean core modules');
     const warm = await this.compile('');
     if (!warm.success) {
       throw new Error(warm.error || 'the Lean runtime rejected the warm-up compile');
     }
-    this._setState('ready', 'Lean ready');
-    this._setProgress('Lean ready', 100, this.networkBytes.downloaded === 0
-      ? 'The Lean core came from the browser cache this visit — no download.'
-      : `${(this.networkBytes.downloaded / 1048576).toFixed(1)} MB of Lean core downloaded (cached for next time).`);
+    this._mark('ready');
+    this._stopTicker();
+    this.state = 'ready';
+    this._setProgress('Lean ready', 100, this._startupDetail());
+    this._emit();
     return true;
   }
 
@@ -150,12 +232,14 @@ export class LeanEngine {
       const message = event.data || {};
       switch (message.type) {
         case 'worker_boot':
+          this._mark('worker-script');
           worker.postMessage({ type: 'load_library', files: [] });
           break;
         case 'library_received':
           worker.postMessage({ type: 'start_worker' });
           break;
         case 'worker_ready':
+          this._mark('wasm-ready');
           this.booted = true;
           ready.resolve();
           break;
@@ -174,7 +258,13 @@ export class LeanEngine {
           if (this._compilePending) this._compilePending.lastActivity = Date.now();
           break;
         case 'progress':
-          if (message.data) this._setProgress(String(message.data), this.progress.percent);
+          // Emscripten's setStatus ("Downloading data…", "Running…") describes the
+          // wasm phase. Keep it as detail: it must not replace the ticking phase
+          // message, which is what tells the reader the page is alive.
+          if (message.data) {
+            this.progress = { ...this.progress, detail: String(message.data) };
+            this._emit();
+          }
           break;
         case 'import_progress': {
           const loaded = Number(message.loaded) || 0;

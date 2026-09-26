@@ -352,6 +352,36 @@ try {
   if (!indexOk) failures += 1;
   console.log(`${indexOk ? '✓' : '✗'} index: ${JSON.stringify(index)}`);
 
+  // The complaint this fixes: on a refresh the loading text used to sit at
+  // "Downloading the Lean core library (6/31 MB)" for the whole ~14 s wasm
+  // compile, on a visit that downloads nothing. Reload (the cache is warm by
+  // now), sample the progress text, and check what it claims.
+  const samples = [];
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const line = await page.evaluate(() => {
+      const engine = window.leanTutorials?.engine;
+      return engine ? `${engine.state}|${engine.progress.message}` : null;
+    });
+    if (line && samples.at(-1) !== line) samples.push(line);
+    if (line?.startsWith('ready')) break;
+    await page.waitForTimeout(300);
+  }
+  const claimedDownload = samples.filter((line) => line.includes('Downloading the Lean core'));
+  const compiled = samples.some((line) => line.includes('compiling WebAssembly'));
+  const unpacked = samples.some((line) => line.includes('Unpacking the cached Lean core'));
+  const detail = await page.evaluate(() => window.leanTutorials.engine.progress.detail ?? '');
+  const panel = await page.evaluate(() => {
+    document.querySelector('#engine-chip').click();
+    return document.querySelector('#engine-panel')?.textContent.replace(/\s+/g, ' ') ?? '';
+  });
+  const reloadOk = samples.length > 1 && compiled && unpacked && claimedDownload.length === 0
+    && /WebAssembly compile [\d.]+s/.test(detail) && /Nothing was downloaded this visit/.test(detail)
+    && /WebAssembly compile/.test(panel);
+  if (!reloadOk) failures += 1;
+  console.log(`${reloadOk ? '✓' : '✗'} warm reload: ${samples.length} progress updates, ` +
+    `${claimedDownload.length} false download claims — "${detail.slice(0, 150)}"`);
+
   // A blocked or rewritten runtime must produce an actionable error, not a wasm
   // "expected magic word" crash. This is exactly what CI hit when Cloudflare
   // challenged the runner's datacenter IP for the pinned wasm.

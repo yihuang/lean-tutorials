@@ -63,7 +63,8 @@ jobs:
             const parts = runtime.wasm.chunks.map((name) => readFileSync(`dist/lean-wasm/${name}`));
             const digest = createHash("sha256").update(Buffer.concat(parts)).digest("hex");
             if (digest !== runtime.wasm.sha256) throw new Error(`assembled wasm digest ${digest} != ${runtime.wasm.sha256}`);
-            console.log(`wasm chunks reassemble to ${digest.slice(0, 16)}… (${runtime.wasm.bytes} bytes)`);
+            if (runtime.variant !== 'full') throw new Error(`expected the full runtime variant, staged ${runtime.variant}`);
+            console.log(`wasm chunks reassemble to ${digest.slice(0, 16)}… (${runtime.wasm.bytes} bytes, variant ${runtime.variant})`);
           '
 
   browser:

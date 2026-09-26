@@ -79,14 +79,20 @@ byte log when the test is also the server):
 
 The browser's HTTP cache holds all of it, including the 100 MB wasm: every
 runtime URL is versioned (`?v=<release>`) and served `immutable`, and the body
-arrives brotli-compressed (~16 MB), which is what makes it cacheable at all. A warm
-start on this 2-vCPU container splits as ~14 s wasm compile/instantiate, ~1.7 s
-inflating and staging the core library, ~1.5 s Init import — the compile is what
-dominates here, and it is much faster on ordinary hardware.
+arrives brotli-compressed (~16 MB), which is what makes it cacheable at all.
 
-The engine status panel (tap the chip in the header) reports the same thing from
-the app's point of view: "This visit: 0 MB downloaded, 30.7 MB of Lean core
-served from the browser cache."
+**The wait on a reload is a compile, not a download.** Measured on this 2-vCPU
+container, a *warm* load reports `Started in 17.8s: WebAssembly compile 14.1s, core
+library 2.1s, Init import 1.4s — nothing was downloaded this visit`. Compiling
+96 MB of WebAssembly cannot be cached across page loads, so it happens every time;
+the bytes it compiles do come from the cache. The engine tracks these phases
+(`engine.timeline`) and the UI reports them, so the slow part is named rather than
+hidden behind a stalled byte counter — `tests/browser-check.mjs` reloads the page
+and fails the build if any progress text claims a download on a visit that
+transferred nothing.
+
+The status panel (tap the chip in the header) carries the same breakdown, and
+`?mem=<MB>` overrides the wasm memory size for low-memory testing.
 
 The first page load downloads the runtime (about **47 MB brotli-compressed**:
 ~40 KB of JS glue, ~16 MB wasm, ~31 MB of packed Lean core) and imports the Init
@@ -227,6 +233,20 @@ while and then need a restart.
 by SHA-256 for both `lean.js` and `lean.wasm`; `scripts/pack-core-layer.mjs` is
 deterministic, so an unchanged runtime produces byte-identical packs and Pages
 re-uploads nothing.
+
+Two builds ship in that release and `fetch-runtime.mjs` picks one with
+`--variant full|slim` (default `full`):
+
+| | bytes on the wire | wasm compile | Init import | checks |
+|---|---|---|---|---|
+| `full` (default) | ~47 MB | 14.1 s | 1.4 s | native dispatch |
+| `slim` | ~35 MB | 4.1 s | 12.0 s | interpreted |
+
+Slim is upstream's iOS build: without the boxed wrappers the library is
+interpreted, which moves the cost from the compile into the import and every
+proof check, so it is opt-in — use it where the *compile* is what fails (small
+devices). `npm run prepare:runtime -- --variant slim` switches it, and CI asserts
+the staged variant so a slim build cannot ship by accident.
 
 To move to a new release:
 

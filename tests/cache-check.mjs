@@ -106,6 +106,15 @@ console.log('');
 for (const result of results) {
   const core = result.engine.network;
   console.log(`${result.label}: Lean ready in ${result.bootSeconds.toFixed(1)}s (${result.phases.join(' → ')})`);
+  if (result.engine.timeline?.length) {
+    const marks = result.engine.timeline;
+    const step = (a, b) => `${b - a}ms`;
+    const parts = [];
+    for (let index = 1; index < marks.length; index += 1) {
+      parts.push(`${marks[index].phase} +${step(marks[index - 1].at, marks[index].at)}`);
+    }
+    console.log(`   timeline: ${marks[0].phase}@${marks[0].at} ${parts.join('  ')}`);
+  }
   console.log(`   engine:  ${(core.downloaded / 1048576).toFixed(2)} MB of Lean core downloaded, ${(core.cached / 1048576).toFixed(2)} MB from browser cache`);
   if (result.sizes.length > 0) {
     console.log(`   timing:  ${result.sizes.map((entry) => `${entry.name}=${entry.transfer}B`).join(' ')}`);

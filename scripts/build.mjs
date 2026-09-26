@@ -65,8 +65,10 @@ for (let offset = 0, index = 0; offset < wasm.length; offset += CHUNK_BYTES, ind
 }
 
 const core = JSON.parse(readFileSync(join(runtimeSrc, 'core-layer.json'), 'utf8'));
+const variant = existsSync(join(runtimeSrc, 'VARIANT')) ? readFileSync(join(runtimeSrc, 'VARIANT'), 'utf8').trim() : 'full';
 const runtime = {
   release: RELEASE_TAG,
+  variant,
   assetVersion: LEAN_ASSET_VERSION,
   wasm: {
     bytes: wasm.length,

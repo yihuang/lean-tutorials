@@ -74,6 +74,7 @@ export async function launchProfile(chromium, overrides = {}) {
     message: window.leanTutorials.engine.progress.message,
     detail: window.leanTutorials.engine.progress.detail ?? null,
     network: window.leanTutorials.engine.networkBytes,
+    timeline: window.leanTutorials.engine.timeline,
     error: window.leanTutorials.engine.error?.message ?? null,
   }));
 }
