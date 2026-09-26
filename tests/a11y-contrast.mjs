@@ -27,7 +27,25 @@ const page = context.pages()[0] ?? await context.newPage();
 const base = externalUrl || `http://localhost:${port}`;
 const failures = [];
 
-const CONTRAST = `
+// Every text style that carries meaning, in both colour schemes. Feedback
+// states (goals, messages, banners) only exist after a proof check, which would
+// need the whole Lean runtime; for a colour audit the CSS is all that matters,
+// so the same classes are instantiated for the measurement.
+const LESSON_SELECTORS = [
+  'p', '.lesson-title', '.lesson-sub', '.eyebrow', '.statement', '.goal', '.msg-body',
+  '.btn.primary', '.banner.ok', '.banner.err', '.banner.info', '.footer p', '.chip',
+  '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
+  '.result.ok .result-title', '.result.ok .result-detail', '.next-chip',
+  '.infoview-title', '.infoview-badge', '.goal-hyps .hyp', '.goal-target', '.goal-name', '.infoview-note',
+  '.theme-title', '.theme-summary', '.theme-progress', '.planned-chip', '.planned-line', '.planned-topic',
+  '.topic-name', '.topic-desc', '.topic-count', '.overall-count', '.overall-hint', '.sandbox-row',
+  '.editor-label', '.focus-toggle',
+];
+
+// The focus mode's own chrome, measured on the real elements inside the mode.
+const FOCUS_SELECTORS = ['.focus-bar', '.focus-title', '.focus-exit', '.focus-exit .glyph', '.statement', '.symbols button', 'textarea.editor::placeholder'];
+
+const CONTRAST = (selectors) => `
 (() => {
   const parse = (color) => {
     const parts = String(color).match(/[\\d.]+/g) || [];
@@ -88,15 +106,7 @@ const CONTRAST = `
       '<p class="infoview-note">showing the last complete step</p></div></section>',
   ].join('');
   document.body.append(injected);
-  for (const raw of ${JSON.stringify([
-    'p', '.lesson-title', '.lesson-sub', '.eyebrow', '.statement', '.goal', '.msg-body',
-    '.btn.primary', '.banner.ok', '.banner.err', '.banner.info', '.footer p', '.chip',
-    '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
-    '.result.ok .result-title', '.result.ok .result-detail', '.next-chip',
-    '.infoview-title', '.infoview-badge', '.goal-hyps .hyp', '.goal-target', '.goal-name', '.infoview-note',
-    '.theme-title', '.theme-summary', '.theme-progress', '.planned-chip', '.planned-line', '.planned-topic',
-    '.topic-name', '.topic-desc', '.topic-count', '.overall-count', '.overall-hint', '.sandbox-row',
-  ])}) {
+  for (const raw of ${JSON.stringify(selectors)}) {
     const [selector, pseudo] = raw.split('::');
     const element = document.querySelector(selector);
     if (!element) { rows.push({ selector: raw, missing: true }); continue; }
@@ -115,20 +125,33 @@ const CONTRAST = `
 })()
 `;
 
-async function audit(label, colorScheme) {
+async function audit(label, colorScheme, { focus = false } = {}) {
   await page.emulateMedia({ colorScheme });
   await page.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('textarea.editor');
-  const rows = await page.evaluate(CONTRAST);
+  if (focus) {
+    // Enter the mode the way a reader does, so the measurement is of the real
+    // sheet rather than a stand-in of its classes.
+    await page.click('.focus-toggle');
+    await page.waitForFunction(() => document.documentElement.dataset.focus === 'true');
+  }
+  const rows = await page.evaluate(focus ? CONTRAST(FOCUS_SELECTORS) : CONTRAST(LESSON_SELECTORS));
   console.log(`\n--- ${label} (${colorScheme}) ---`);
   for (const row of rows) {
-    if (row.missing) { console.log(`?  ${row.selector} (not on this page)`); continue; }
+    if (row.missing) {
+      // In the mode, a missing selector means the mode did not render it.
+      if (focus) failures.push(`${label}/${row.selector} missing`);
+      console.log(`?  ${row.selector} (not on this page)`);
+      continue;
+    }
     const large = row.fontSize >= 24 || (row.bold && row.fontSize >= 18.66);
     const minimum = large ? 3 : 4.5;
     const ok = row.ratio >= minimum;
     if (!ok) failures.push(`${label}/${row.selector} contrast ${row.ratio}`);
     console.log(`${ok ? '✓' : '✗'} ${row.selector.padEnd(30)} ${String(row.ratio).padStart(6)}:1  ${row.fontSize}px${row.bold ? ' bold' : ''}  (min ${minimum})`);
   }
+  // Leave again, so the remembered preference does not leak into the next pass.
+  if (focus) await page.click('.focus-exit');
 }
 
 await audit('lesson', 'light');
@@ -152,6 +175,10 @@ const overlap = await page.evaluate(() => {
 const hitOk = String(overlap.hit).includes('btn');
 if (!hitOk || !overlap.withinViewport) failures.push('sticky actions not clickable');
 console.log(`\n${hitOk ? '✓' : '✗'} sticky Check button is the topmost element at its centre (hit ${overlap.hit}, top ${overlap.top}px)`);
+
+// ...and the mode's chrome, entered through the button in both schemes.
+await audit('focus mode', 'light', { focus: true });
+await audit('focus mode', 'dark', { focus: true });
 
 await context.close();
 server?.kill('SIGTERM');

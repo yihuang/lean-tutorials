@@ -31,7 +31,8 @@ document.querySelector('.topbar').after(bootBar);
 const statusPanel = h('div', { class: 'card', id: 'engine-panel' });
 statusPanel.style.display = 'none';
 
-/** @type {{solved: Record<string, boolean>, drafts: Record<string, string>, sandbox: string}} */
+/** @type {{solved: Record<string, boolean>, drafts: Record<string, string>, sandbox: string,
+ *          infoviewCollapsed: boolean, focusMode: boolean}} */
 const store = loadStore();
 
 function loadStore() {
@@ -42,9 +43,12 @@ function loadStore() {
       drafts: parsed.drafts && typeof parsed.drafts === 'object' ? parsed.drafts : {},
       sandbox: typeof parsed.sandbox === 'string' ? parsed.sandbox : '',
       infoviewCollapsed: Boolean(parsed.infoviewCollapsed),
+      // A preference, not progress: a store written before focus mode existed
+      // simply has no field, which reads as "off".
+      focusMode: Boolean(parsed.focusMode),
     };
   } catch {
-    return { solved: {}, drafts: {}, sandbox: '', infoviewCollapsed: false };
+    return { solved: {}, drafts: {}, sandbox: '', infoviewCollapsed: false, focusMode: false };
   }
 }
 
@@ -125,9 +129,15 @@ chip.addEventListener('click', () => {
 
 // ------------------------------------------------------------------ router
 
+// The current lesson view owns the focus-mode listeners and the body attribute;
+// a route change has to tear them down, or the mode would outlive its page.
+let disposeFocus = null;
+
 function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [section, param] = hash.split('/');
+  disposeFocus?.();
+  disposeFocus = null;
   clear(main);
   goalProbe.cancel();
   statusPanel.style.display = 'none';
@@ -291,6 +301,101 @@ function renderTopic(topic) {
   main.append(list);
 }
 
+// -------------------------------------------------------------- focus mode
+
+const FOCUS_GLYPH = { enter: '⤢', exit: '⤡' }; // expand / collapse
+
+/**
+ * Immersive editing for one lesson: the sheet, the hidden chrome and the
+ * statement strip are all in app.css under `html[data-focus="true"]`, this
+ * owns the state, the shortcuts, the focus moves and the measured viewport.
+ *
+ * @param {{toggle: HTMLElement, editor: {focus: (options?: {preventScroll?: boolean}) => void}}} options
+ */
+function createFocusMode({ toggle, editor }) {
+  let active = false;
+
+  // The layout viewport does not shrink when the soft keyboard opens on iOS —
+  // only the visual viewport does, and dvh follows the layout viewport there —
+  // so the sheet's height is measured, with 100dvh as the fallback.
+  const syncViewport = () => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    document.documentElement.style.setProperty('--focus-h', `${Math.round(viewport.height)}px`);
+    document.documentElement.style.setProperty('--focus-top', `${Math.round(viewport.offsetTop)}px`);
+  };
+
+  const listenViewport = (add) => {
+    const method = add ? 'addEventListener' : 'removeEventListener';
+    window[method]('resize', syncViewport);
+    window.visualViewport?.[method]('resize', syncViewport);
+    // iOS also moves the visual viewport (without resizing it) to reveal the caret.
+    window.visualViewport?.[method]('scroll', syncViewport);
+  };
+
+  const onKeydown = (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'i') {
+      event.preventDefault();
+      enter();
+      return;
+    }
+    if (event.key === 'Escape' && active) {
+      event.preventDefault();
+      exit();
+    }
+  };
+
+  /** Drop the sheet without touching the remembered preference. */
+  const teardown = () => {
+    active = false;
+    document.documentElement.dataset.focus = 'false';
+    listenViewport(false);
+    document.documentElement.style.removeProperty('--focus-h');
+    document.documentElement.style.removeProperty('--focus-top');
+    toggle.setAttribute('aria-pressed', 'false');
+    toggle.textContent = FOCUS_GLYPH.enter;
+  };
+
+  function enter() {
+    if (active) return;
+    active = true;
+    document.documentElement.dataset.focus = 'true';
+    toggle.setAttribute('aria-pressed', 'true');
+    toggle.textContent = FOCUS_GLYPH.exit;
+    store.focusMode = true;
+    saveStore();
+    syncViewport();
+    listenViewport(true);
+    // Keyboard users land where the work is; the next Tab reaches the symbols.
+    // preventScroll: the textarea is inside the sheet, so the mode has no reason
+    // to move the page that is hidden behind it.
+    editor.focus({ preventScroll: true });
+  }
+
+  function exit() {
+    if (!active) return;
+    store.focusMode = false;
+    saveStore();
+    teardown();
+    // The exit button disappears with the sheet, so hand focus back to the
+    // control the reader came from — and let the browser reveal it if it is
+    // below the fold, rather than dropping focus on an off-screen button.
+    toggle.focus();
+  }
+
+  window.addEventListener('keydown', onKeydown);
+
+  return {
+    enter,
+    exit,
+    /** Leaving the lesson: keep the preference, drop the listeners. */
+    dispose() {
+      window.removeEventListener('keydown', onKeydown);
+      if (active) teardown();
+    },
+  };
+}
+
 // ------------------------------------------------------------------ lesson
 
 function renderLesson(lesson) {
@@ -359,6 +464,29 @@ function renderLesson(lesson) {
     },
   });
 
+  // The way into focus mode sits in the editor's own header, where the writing
+  // happens. (The editor stays a plain textarea; this is app furniture.)
+  const focusToggle = h('button', {
+    class: 'focus-toggle', type: 'button',
+    'aria-pressed': 'false', 'aria-label': 'Focus mode',
+    title: 'Focus mode (Ctrl/Cmd+Shift+I)',
+    text: FOCUS_GLYPH.enter,
+    onclick: () => focusMode.enter(),
+  });
+  editor.element.prepend(h('div', { class: 'editor-head' },
+    h('span', { class: 'editor-label', text: isFile ? 'Your Lean file' : 'Your tactic block' }),
+    focusToggle));
+
+  // Visible only in the mode (app.css). The mode is a labelled region so a
+  // screen reader announces what it is looking at after the top bar disappears.
+  const focusBar = h('div', { class: 'focus-bar', role: 'region', 'aria-label': 'Focus mode' },
+    h('button', {
+      class: 'focus-exit', type: 'button', onclick: () => focusMode.exit(),
+    }, h('span', { class: 'glyph', 'aria-hidden': 'true', text: '✕' }), h('span', { text: 'Exit' })),
+    h('span', { class: 'focus-title', text: lesson.title }));
+
+  const focusMode = createFocusMode({ toggle: focusToggle, editor });
+
   const checkButton = h('button', {
     class: 'btn primary', type: 'button', text: isFile ? 'Run file' : 'Check proof',
     onclick: () => runCheck(),
@@ -386,17 +514,17 @@ function renderLesson(lesson) {
   nextButton.hidden = true;
   const actions = h('div', { class: 'actions' }, checkButton, clearButton, h('span', { class: 'spacer' }), nextButton);
 
-  const card = h('div', { class: 'card', style: 'margin-top:14px' },
+  const card = h('div', { class: 'card lesson-card' },
     h('p', { class: 'eyebrow', text: 'Your turn' }),
     h('p', {}, inlineProse(lesson.task)),
     isFile
-      ? h('p', { class: 'small muted' }, inlineProse(
+      ? h('p', { class: 'small muted statement-note' }, inlineProse(
         'This one is a whole file: commands like `#check`, `#eval` and `def` are allowed, and the output appears below.'))
       : h('pre', { class: 'statement' }, h('span', { class: 'lbl', text: '⊢ ' }), lesson.statement),
     h('div', { class: 'workbench' },
       infoview.element,
       h('div', { class: 'workbench-main' }, editor.element, actions)));
-  main.append(card);
+  main.append(focusBar, card);
 
   main.append(h('details', { class: 'hint', style: 'margin-top:12px' },
     h('summary', { text: 'Hint' }),
@@ -448,6 +576,10 @@ function renderLesson(lesson) {
   syncUi = () => setChecking(checking);
   setChecking(false);
   editor.focus();
+  // A remembered choice is applied whenever a lesson renders, so moving to the
+  // next lesson keeps the full-screen view.
+  disposeFocus = () => focusMode.dispose();
+  if (store.focusMode) focusMode.enter();
 
   async function runCheck() {
     if (checking) return;

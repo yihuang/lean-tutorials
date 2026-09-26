@@ -213,6 +213,206 @@ check(longHyp.scrollWidth <= longHyp.clientWidth + 1, 'infoview wraps long hypot
   `${longHyp.scrollWidth}px of ${longHyp.clientWidth}px`);
 await page.click('.infoview-toggle');
 
+// ---------------------------------------------------------------- focus mode
+// The immersive editing mode, measured at 390x844 — the size where "it works on
+// my laptop" stops being evidence. This is the layout half; browser-check.mjs
+// runs the same mode against the real Lean runtime.
+await page.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('textarea.editor');
+// A same-fragment goto does not re-render, so start from a known scroll position.
+await page.evaluate(() => window.scrollTo(0, 0));
+
+const focusGeometry = () => page.evaluate(() => {
+  const box = (selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    return { top: Math.round(rect.top), bottom: Math.round(rect.bottom), height: Math.round(rect.height), width: Math.round(rect.width) };
+  };
+  const sheet = document.querySelector('main');
+  const check = document.querySelector('.actions .btn.primary');
+  const checkRect = check.getBoundingClientRect();
+  const hit = document.elementFromPoint(checkRect.left + checkRect.width / 2, checkRect.top + checkRect.height / 2);
+  return {
+    focus: document.documentElement.dataset.focus ?? 'false',
+    viewport: { height: window.innerHeight, width: window.innerWidth },
+    sheet: box('main'),
+    sheetOverflow: Math.round(sheet.scrollHeight - sheet.clientHeight),
+    editor: box('textarea.editor'),
+    infoview: box('.infoview'),
+    check: box('.actions .btn.primary'),
+    checkHit: String(hit?.className ?? hit?.tagName ?? ''),
+    statement: box('.card > .statement'),
+    topbar: getComputedStyle(document.querySelector('.topbar')).display,
+    enginePanel: getComputedStyle(document.querySelector('#engine-panel')).display,
+    nav: getComputedStyle(document.querySelector('.lesson-nav')).display,
+    hint: getComputedStyle(document.querySelector('details.hint')).display,
+    prose: getComputedStyle(document.querySelector('main > h1')).display,
+    scrollY: Math.round(window.scrollY),
+  };
+});
+
+const toggleButton = await page.evaluate(() => {
+  const button = document.querySelector('.focus-toggle');
+  const rect = button.getBoundingClientRect();
+  return {
+    width: Math.round(rect.width), height: Math.round(rect.height),
+    pressed: button.getAttribute('aria-pressed'), glyph: button.textContent.trim(),
+  };
+});
+check(toggleButton.width >= 44 && toggleButton.height >= 44 && toggleButton.pressed === 'false' && toggleButton.glyph.length > 0,
+  'focus: the toggle is a 44px target with a glyph and aria-pressed', JSON.stringify(toggleButton));
+
+const normal = await focusGeometry();
+check(normal.focus === 'false' && normal.topbar === 'flex' && normal.editor.height > 120,
+  'focus: off by default, with the normal chrome', `editor ${normal.editor.height}px, top bar ${normal.topbar}`);
+
+// Entering from a scrolled page must not disturb the page behind the sheet.
+await page.evaluate(() => window.scrollTo(0, 260));
+// Clicked in-page: Playwright's own click would scroll the button into view
+// first (the editor header can sit below the fold once the goals panel grows),
+// which is a test artefact, not what a reader does.
+await page.evaluate(() => document.querySelector('.focus-toggle').click());
+await page.waitForFunction(() => document.documentElement.dataset.focus === 'true');
+await overflow('focus mode');
+const focused = await focusGeometry();
+
+// The numbers the brief asks for, printed rather than only asserted.
+console.log(`  focus mode @390x844: sheet ${focused.sheet.height}px of ${focused.viewport.height}px ` +
+  `(top ${focused.sheet.top}px), editor ${normal.editor.height}px → ${focused.editor.height}px, ` +
+  `goals ${focused.infoview.height}px, statement strip ${focused.statement.height}px, Check ${focused.check.height}px`);
+
+check(focused.focus === 'true' && focused.topbar === 'none' && focused.nav === 'none' && focused.hint === 'none'
+  && focused.prose === 'none' && focused.enginePanel === 'none',
+  'focus: the mode hides the top bar, the prose, the hints, the lesson nav and the engine panel', JSON.stringify({
+    topbar: focused.topbar, prose: focused.prose, hint: focused.hint, nav: focused.nav, enginePanel: focused.enginePanel,
+  }));
+check(focused.sheet.height >= focused.viewport.height - 1 && focused.sheet.top === 0,
+  'focus: the mode fills the viewport', `${focused.sheet.height}px of ${focused.viewport.height}px from y=${focused.sheet.top}`);
+check(focused.editor.height > normal.editor.height + 100,
+  'focus: the editor gets the space', `${normal.editor.height}px → ${focused.editor.height}px`);
+check(focused.infoview !== null && focused.infoview.height >= 44 && focused.infoview.bottom <= focused.viewport.height,
+  'focus: the goals panel is still on screen', focused.infoview ? `${focused.infoview.height}px, ends at ${focused.infoview.bottom}px` : 'missing');
+check(focused.statement !== null && focused.statement.height <= 44 && focused.statement.top < focused.viewport.height / 3,
+  'focus: the statement is a compact strip that stays at the top', focused.statement ? `${focused.statement.height}px at y=${focused.statement.top}` : 'missing');
+check(focused.check.height >= 44 && focused.check.bottom <= focused.viewport.height + 1 && focused.checkHit.includes('btn'),
+  'focus: Check is ≥ 44px, on screen and topmost', `${focused.check.height}px, bottom ${focused.check.bottom}px, hit ${focused.checkHit}`);
+
+// The page behind the sheet must not scroll: only the panels inside it may.
+const scrollLock = await page.evaluate(() => {
+  window.scrollBy(0, 600);
+  const sheet = document.querySelector('main');
+  const scroller = document.scrollingElement;
+  return {
+    y: Math.round(window.scrollY),
+    documentOverflow: Math.round(scroller.scrollHeight - scroller.clientHeight),
+    contentFits: sheet.scrollHeight - sheet.clientHeight <= 1,
+  };
+});
+check(scrollLock.y === 0 && scrollLock.documentOverflow === 0 && scrollLock.contentFits,
+  'focus: the page body does not scroll in the mode (and nothing is clipped)',
+  `scrollY ${scrollLock.y}px after scrollBy(0,600), document overflow ${scrollLock.documentOverflow}px, sheet overflow ${scrollLock.contentFits ? 0 : 'yes'}`);
+
+// The sheet is driven by the measured viewport, not only by dvh: this is the
+// hook the soft keyboard uses (iOS shrinks the visual viewport, not the layout
+// one), so a short viewport must keep the editor and Check on screen.
+await page.setViewportSize({ width: 390, height: 430 });
+await page.waitForTimeout(120);
+const keyboard = await focusGeometry();
+console.log(`  focus mode @390x430 (soft-keyboard-ish): sheet ${keyboard.sheet.height}px, ` +
+  `editor ${keyboard.editor.height}px, goals ${keyboard.infoview.height}px, Check bottom ${keyboard.check.bottom}px`);
+check(keyboard.sheet.height <= keyboard.viewport.height + 1 && keyboard.check.bottom <= keyboard.viewport.height + 1
+  && keyboard.editor.height >= 44 && keyboard.sheetOverflow <= 1,
+  'focus: a short viewport keeps the editor usable and Check on screen', JSON.stringify({
+    sheet: keyboard.sheet.height, viewport: keyboard.viewport.height, editor: keyboard.editor.height,
+    checkBottom: keyboard.check.bottom, clipped: keyboard.sheetOverflow,
+  }));
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(120);
+
+await page.click('.focus-exit');
+await page.waitForFunction(() => document.documentElement.dataset.focus === 'false');
+const restored = await focusGeometry();
+const focusReturned = await page.evaluate(() => String(document.activeElement?.className ?? ''));
+const toggleInView = await page.evaluate(() => {
+  const rect = document.querySelector('.focus-toggle').getBoundingClientRect();
+  return rect.top >= 0 && rect.bottom <= window.innerHeight + 1;
+});
+check(restored.focus === 'false' && restored.topbar === 'flex' && Math.abs(restored.editor.height - normal.editor.height) <= 2,
+  'focus: exiting restores the normal page', `editor ${focused.editor.height}px → ${restored.editor.height}px, top bar ${restored.topbar}`);
+check(focusReturned.includes('focus-toggle') && toggleInView,
+  'focus: focus returns to the toggle on exit, and it is on screen', `${focusReturned || '(body)'}, in view ${toggleInView}`);
+
+// The remembered choice: seeded before the app boots, so no proof has to run.
+const focusPage = await context.newPage();
+await focusPage.addInitScript(() => {
+  try {
+    localStorage.setItem('lean-tutorials:v1', JSON.stringify({ solved: {}, drafts: {}, sandbox: '', focusMode: true }));
+  } catch { /* ignore */ }
+});
+await focusPage.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
+await focusPage.waitForSelector('textarea.editor');
+const remembered = await focusPage.evaluate(() => ({
+  focus: document.documentElement.dataset.focus,
+  topbar: getComputedStyle(document.querySelector('.topbar')).display,
+  bar: document.querySelector('.focus-bar')?.getAttribute('aria-label') ?? '',
+  title: document.querySelector('.focus-title')?.textContent ?? '',
+  pressed: document.querySelector('.focus-toggle').getAttribute('aria-pressed'),
+  active: String(document.activeElement?.tagName ?? ''),
+}));
+check(remembered.focus === 'true' && remembered.topbar === 'none' && remembered.pressed === 'true'
+  && remembered.bar === 'Focus mode' && remembered.title.length > 0 && remembered.active === 'TEXTAREA',
+  'focus: a remembered mode is applied when the lesson renders, focus in the editor', JSON.stringify(remembered));
+
+await focusPage.keyboard.press('Escape');
+await focusPage.waitForFunction(() => document.documentElement.dataset.focus === 'false');
+const escaped = await focusPage.evaluate(() => ({
+  focus: document.documentElement.dataset.focus,
+  active: String(document.activeElement?.className ?? ''),
+  stored: JSON.parse(localStorage.getItem('lean-tutorials:v1')).focusMode,
+}));
+check(escaped.focus === 'false' && escaped.stored === false && escaped.active.includes('focus-toggle'),
+  'focus: Esc leaves the mode, remembers it, and hands focus back', JSON.stringify(escaped));
+
+await focusPage.keyboard.press('Control+Shift+I');
+await focusPage.waitForFunction(() => document.documentElement.dataset.focus === 'true');
+const shortcut = await focusPage.evaluate(() => ({
+  pressed: document.querySelector('.focus-toggle').getAttribute('aria-pressed'),
+  stored: JSON.parse(localStorage.getItem('lean-tutorials:v1')).focusMode,
+  active: String(document.activeElement?.className ?? ''),
+}));
+check(shortcut.pressed === 'true' && shortcut.stored === true && shortcut.active === 'editor',
+  'focus: Ctrl/Cmd+Shift+I enters (same result as the button)', JSON.stringify(shortcut));
+
+// The choice survives a lesson change, which is the point of remembering it.
+await focusPage.evaluate(() => { location.hash = '#/lesson/rfl'; });
+await focusPage.waitForFunction(() => document.documentElement.dataset.focus === 'true' && document.querySelector('.focus-title')?.textContent === 'A proof is a value');
+const nextLesson = await focusPage.evaluate(() => ({
+  focus: document.documentElement.dataset.focus,
+  title: document.querySelector('.focus-title').textContent,
+  top: Math.round(document.querySelector('main').getBoundingClientRect().top),
+}));
+check(nextLesson.focus === 'true' && nextLesson.top === 0, 'focus: moving to the next lesson keeps the mode', JSON.stringify(nextLesson));
+
+// Entering from a scrolled page freezes the document behind the sheet: the
+// root's overflow:hidden clamps the scroll back to 0 (invisibly — the sheet is
+// opaque), so nothing behind the mode can move while it is up.
+await focusPage.click('.focus-exit');
+await focusPage.evaluate(() => window.scrollTo(0, 320));
+const scrollBefore = await focusPage.evaluate(() => Math.round(window.scrollY));
+await focusPage.evaluate(() => document.querySelector('.focus-toggle').click());
+await focusPage.waitForFunction(() => document.documentElement.dataset.focus === 'true');
+const scrolled = await focusPage.evaluate(() => ({
+  sheet: Math.round(document.querySelector('main').getBoundingClientRect().top),
+  page: Math.round(window.scrollY),
+}));
+await focusPage.click('.focus-exit');
+await focusPage.waitForFunction(() => document.documentElement.dataset.focus === 'false');
+check(scrolled.sheet === 0 && scrolled.page === 0 && scrollBefore > 0,
+  'focus: the mode freezes the page behind it',
+  `page was at ${scrollBefore}px; sheet top ${scrolled.sheet}px, document scroll clamped to ${scrolled.page}px`);
+await focusPage.close();
+
 // A lesson already in the solved set must show the way onward straight away
 // (seeded before the app reads storage, so no proof has to run).
 const solvedPage = await context.newPage();

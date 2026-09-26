@@ -65,6 +65,16 @@ await phone.waitForFunction(() => document.querySelectorAll('.infoview .goal-car
 await phone.waitForTimeout(300);
 await phone.screenshot({ path: join(out, 'mobile-infoview.png'), fullPage: true });
 
+// The immersive mode on a phone. Not `fullPage`: the mode *is* one viewport,
+// and the page behind it cannot scroll.
+await phone.evaluate(() => document.querySelector('.focus-toggle').click());
+await phone.waitForFunction(() => document.documentElement.dataset.focus === 'true');
+await phone.waitForTimeout(300);
+await phone.screenshot({ path: join(out, 'mobile-focus-mode.png') });
+await phone.click('.focus-exit');
+await phone.waitForFunction(() => document.documentElement.dataset.focus === 'false');
+await phone.waitForTimeout(200);
+
 // ...and checking still shows the verdict: the goal text itself lives in the
 // infoview now, so the feedback only carries the messages.
 await phone.click('.actions .btn.primary');

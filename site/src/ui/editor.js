@@ -100,7 +100,8 @@ export function createEditor(options = {}) {
 
   return {
     element,
-    focus: () => textarea.focus(),
+    /** @param {{preventScroll?: boolean}} [options] */
+    focus: (options) => textarea.focus(options),
     cursor,
     get value() { return textarea.value; },
     set value(next) { textarea.value = String(next ?? ''); emit(); },
