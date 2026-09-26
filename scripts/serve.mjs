@@ -73,7 +73,11 @@ const server = createServer((req, res) => {
   }
   if (!existsSync(filePath)) { res.writeHead(404).end('not found'); return; }
 
-  const type = TYPES[extname(filePath)] || 'application/octet-stream';
+  // Same content type Pages serves for chunks (see site/_headers): it is what makes
+  // Cloudflare compress them, and locally it keeps the two paths identical.
+  const type = /lean\.wasm\.(part|chunk)-\d+$/.test(filePath)
+    ? 'application/wasm'
+    : (TYPES[extname(filePath)] || 'application/octet-stream');
   const headers = isRuntime
     ? runtimeHeaders({ 'content-type': type, 'cache-control': cacheable(url.search), 'content-length': String(statSync(filePath).size) })
     : runtimeHeaders({ 'content-type': type, 'cache-control': 'no-store' });

@@ -29,6 +29,12 @@
   Cache-Control: public, max-age=31536000, immutable
 /lean-wasm/lean.wasm.part-*
   Cache-Control: public, max-age=31536000, immutable
+  # Cloudflare compresses by content type, and it does not compress
+  # application/octet-stream. Without this the ~96 MB of chunks cross the wire raw
+  # (16 MB compressed) and a browser is far less likely to keep them in its cache.
+  # These files are fragments of a wasm module, concatenated by the worker, so
+  # application/wasm is also the honest type.
+  Content-Type: application/wasm
 
 # Read by the Pages Function, not the browser.
 /lean-wasm/runtime.json
