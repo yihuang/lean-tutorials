@@ -16,7 +16,7 @@ import {
   buildSource, codeOnly, forbiddenUsed, FORBIDDEN_HELP, GOAL_TRACE_MARKER, missingRequirements,
   PREVIEW_AXIOM,
 } from '../site/src/lean/source.js';
-import { locate, parseOutput, relevant } from '../site/src/lean/diagnostics.js';
+import { isSuggestion, locate, parseOutput, relevant, suggestionsFrom } from '../site/src/lean/diagnostics.js';
 import { formatGoal, goalsFromDiagnostics, goalsFromText } from '../site/src/lean/goals.js';
 import { ABBREVIATIONS, expandAbbreviation, suggestAbbreviation } from '../site/src/lean/unicode.js';
 import { coreLayerBytes } from '../site/src/lean/packs.js';
@@ -302,6 +302,26 @@ test('locate maps diagnostics onto learner lines and hides generated ones', () =
   assert.equal(diagnostics[1].component, 'learner');
   assert.equal(diagnostics[1].userLine, 2);
   assert.equal(relevant(diagnostics).length, 2);
+});
+
+test('suggestionsFrom collects `grind?`/`simp?` reports and drops the editor tag', () => {
+  const diagnostics = [
+    { severity: 'information', message: 'Try this:\n  [apply] simp only [Nat.add_zero]' },
+    { severity: 'information', message: 'Try these:\n  [apply] grind only [= List.length_append]\n  [apply] grind => instantiate only [= List.length_append]' },
+    { severity: 'information', message: 'Nat.add_comm (n m : Nat) : n + m = m + n' },
+    { severity: 'error', message: 'Try this: not a suggestion' },
+    { severity: 'information', message: 'Try this:\n  [suggest] unknown tag stays put' },
+  ];
+  assert.equal(isSuggestion(diagnostics[0]), true);
+  assert.equal(isSuggestion(diagnostics[1]), true);
+  assert.equal(isSuggestion(diagnostics[2]), false, 'plain information output is not a suggestion');
+  assert.equal(isSuggestion(diagnostics[3]), false, 'only information severity counts');
+  assert.deepEqual(suggestionsFrom(diagnostics), [
+    'Try this:\nsimp only [Nat.add_zero]',
+    'Try these:\ngrind only [= List.length_append]\ngrind => instantiate only [= List.length_append]',
+    'Try this:\n  [suggest] unknown tag stays put',
+  ]);
+  assert.deepEqual(suggestionsFrom([]), []);
 });
 
 test('goalsFromDiagnostics reads marker-then-state traces', () => {

@@ -158,7 +158,12 @@ dist/lean-wasm/            production: lean.wasm split into lean.wasm.part-NNN
   a push validates the previous deployment. Always name the deployment hostname.
 - **Masked local paths.** If a runtime file exists locally but not in production (or the
   reverse), the local suite proves nothing. Keep the dev tree structurally identical to
-  `dist` (which is why the fetched binary is named `lean.wasm.chunk-000`).
+  `dist` (which is why the fetched binary is named `lean.wasm.chunk-000`). Corollary:
+  `runtime.json` is cached per origin, so serving `site` and `dist` on the same port
+  (the layout test uses 8795) leaves the browser holding the *other* tree's chunk list —
+  every `lean.wasm.part-*` request 404s, the engine reports an error, and the layout
+  test's infoview checks fail for reasons that have nothing to do with the change. Give
+  an ad-hoc probe its own port, or wipe `tests/.artifacts/chrome-profile` afterwards.
 - **`404.html` plus a Function.** With a `404.html` present, Pages' static layer answers
   requests that would otherwise reach a Function. Since there are no Functions, the
   404 page is safe and desirable (typos become honest 404s).

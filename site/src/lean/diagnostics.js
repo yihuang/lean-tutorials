@@ -89,6 +89,40 @@ export function relevant(diagnostics) {
   });
 }
 
+/**
+ * `grind?`, `simp?` and the other `?` variants report what their search found as
+ * an information diagnostic that starts with "Try this:" — a proof, not a
+ * problem to fix. Editors render the tag on each suggestion line (`[apply]`) as
+ * a clickable code action; there is no editor here, so it is dropped and the
+ * learner reads the tactic itself.
+ */
+const SUGGESTION_HEADER = /^\s*Try (?:this|these):/;
+const CODE_ACTION_TAG = /^\s*\[apply\]\s*/;
+
+/** Is this diagnostic a reported search result rather than something to fix? */
+export function isSuggestion(diagnostic) {
+  return diagnostic?.severity === 'information' && SUGGESTION_HEADER.test(diagnostic.message ?? '');
+}
+
+/**
+ * The reported suggestions, one entry per message, without the editor-only tag:
+ *
+ *   Try this:
+ *     [apply] grind only [= List.length_append]
+ *
+ * becomes `Try this:\n  grind only [= List.length_append]`.
+ *
+ * @param {RawDiagnostic[]} diagnostics
+ * @returns {string[]}
+ */
+export function suggestionsFrom(diagnostics) {
+  return diagnostics.filter(isSuggestion).map((diagnostic) => String(diagnostic.message)
+    .split('\n')
+    .map((line) => line.replace(CODE_ACTION_TAG, ''))
+    .join('\n')
+    .trimEnd());
+}
+
 export function countBySeverity(diagnostics, severity) {
   return diagnostics.filter((diagnostic) => diagnostic.severity === severity).length;
 }

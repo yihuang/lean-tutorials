@@ -12,7 +12,7 @@
 // require the right *value*, not just a file that parses).
 
 import { buildSource, codeOnly, forbiddenUsed, GOAL_TRACE_MARKER, missingRequirements } from './source.js';
-import { locate, parseOutput, relevant } from './diagnostics.js';
+import { isSuggestion, locate, parseOutput, relevant, suggestionsFrom } from './diagnostics.js';
 import { formatGoal, goalsFromDiagnostics, goalsFromText } from './goals.js';
 
 /**
@@ -29,6 +29,7 @@ import { formatGoal, goalsFromDiagnostics, goalsFromText } from './goals.js';
  * @property {string} detail
  * @property {CheckMessage[]} messages
  * @property {string[]} goals
+ * @property {string[]} suggestions reported by `grind?` / `simp?` / `simp_all?`
  * @property {string[]} output informational lines (#eval, #check) — file lessons
  * @property {number} elapsed
  */
@@ -37,7 +38,7 @@ import { formatGoal, goalsFromDiagnostics, goalsFromText } from './goals.js';
 function fail(kind, headline, detail, extra = {}) {
   return {
     ok: false, kind, headline, detail,
-    messages: [], goals: [], output: [], elapsed: 0, ...extra,
+    messages: [], goals: [], suggestions: [], output: [], elapsed: 0, ...extra,
   };
 }
 
@@ -55,22 +56,23 @@ async function checkFileLesson(engine, lesson, input) {
   const run = await engine.compile(source.code);
   const diagnostics = locate(parseOutput(run.output), source);
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  const suggestions = suggestionsFrom(diagnostics);
   const output = diagnostics
-    .filter((diagnostic) => diagnostic.severity === 'information')
+    .filter((diagnostic) => diagnostic.severity === 'information' && !isSuggestion(diagnostic))
     .map((diagnostic) => diagnostic.message);
   // Information lines are the *output* here, so they do not repeat as messages.
   const messages = asMessages(relevant(diagnostics)).filter((message) => message.severity !== 'information');
   const elapsed = performance.now() - started;
 
   if (!run.success && errors.length === 0) {
-    return fail('runtime', 'Lean could not finish', run.error || 'Unknown runtime error.', { messages, output, elapsed });
+    return fail('runtime', 'Lean could not finish', run.error || 'Unknown runtime error.', { messages, output, suggestions, elapsed });
   }
   if (errors.length > 0) {
     return {
       ok: false, kind: 'errors',
       headline: 'Lean rejected the file',
       detail: 'Fix the messages below; line numbers refer to your own lines.',
-      messages, goals: [], output, elapsed,
+      messages, goals: [], suggestions, output, elapsed,
     };
   }
 
@@ -84,7 +86,7 @@ async function checkFileLesson(engine, lesson, input) {
         ok: false, kind: 'errors',
         headline: missing.length === 1 ? 'The output is not what the task asks for' : 'Some required output is missing',
         detail: `Run the file and compare with the task. Looking for: ${missing.map((needle) => `\`${needle}\``).join(', ')}`,
-        messages, goals: [], output, elapsed,
+        messages, goals: [], suggestions, output, elapsed,
       };
     }
   }
@@ -93,7 +95,7 @@ async function checkFileLesson(engine, lesson, input) {
     ok: true, kind: 'verified',
     headline: 'Ran clean',
     detail: 'Lean accepted the file in your browser.',
-    messages, goals: [], output, elapsed,
+    messages, goals: [], suggestions, output, elapsed,
   };
 }
 
@@ -124,12 +126,17 @@ async function checkTacticLesson(engine, lesson, input) {
   // itself; the goal panel already shows that, so keep it out of the list.
   const unsolved = errors.filter((error) => (error.kind || '').includes('unsolvedGoals') || /unsolved goals/i.test(error.message));
   const unsolvedMessages = new Set(unsolved.map((error) => error.message));
+  // `grind?` / `simp?` answer with a proof, not a diagnostic: they are reported
+  // the same way whether the tactic closed the goal or not, and the UI gives
+  // them their own block instead of the message list.
+  const suggestions = suggestionsFrom(checkDiagnostics);
   const visible = asMessages(relevant(checkDiagnostics))
-    .filter((message) => !unsolvedMessages.has(message.message) || goals.length === 0);
+    .filter((message) => !unsolvedMessages.has(message.message) || goals.length === 0)
+    .filter((message) => !isSuggestion(message));
   const elapsed = performance.now() - started;
 
   if (!checkRun.success && errors.length === 0) {
-    return fail('runtime', 'Lean could not finish', checkRun.error || 'Unknown runtime error.', { messages: visible, elapsed });
+    return fail('runtime', 'Lean could not finish', checkRun.error || 'Unknown runtime error.', { messages: visible, suggestions, elapsed });
   }
 
   if (errors.length > 0) {
@@ -141,7 +148,7 @@ async function checkTacticLesson(engine, lesson, input) {
           ? 'At least one goal is still open — the goal panel shows what is left to prove.'
           : 'Lean is still waiting for a proof of the goal.')
         : 'Fix the messages below; line numbers refer to your tactic block.',
-      messages: visible, goals, output: [], elapsed,
+      messages: visible, goals, suggestions, output: [], elapsed,
     };
   }
 
@@ -151,7 +158,7 @@ async function checkTacticLesson(engine, lesson, input) {
       ok: false, kind: 'errors',
       headline: 'The proof could not be inspected',
       detail: wrapperErrors[0]?.message || goalRun.error || 'Lean reported an error while inspecting the goals.',
-      messages: visible.concat(asMessages(wrapperErrors)), goals: [], output: [], elapsed,
+      messages: visible.concat(asMessages(wrapperErrors)), goals: [], suggestions, output: [], elapsed,
     };
   }
 
@@ -160,7 +167,7 @@ async function checkTacticLesson(engine, lesson, input) {
       ok: false, kind: 'open-goals',
       headline: goals.length === 1 ? 'One goal remains' : `${goals.length} goals remain`,
       detail: 'Your tactics ran without errors but did not close the goal.',
-      messages: visible, goals, output: [], elapsed,
+      messages: visible, goals, suggestions, output: [], elapsed,
     };
   }
 
@@ -169,7 +176,7 @@ async function checkTacticLesson(engine, lesson, input) {
     headline: 'Proof verified',
     detail: 'The Lean kernel checked it on your device. No goals remain.',
     messages: visible.filter((message) => message.severity !== 'information'),
-    goals: [], output: [], elapsed,
+    goals: [], suggestions, output: [], elapsed,
   };
 }
 

@@ -464,6 +464,15 @@ a.btn { line-height: 1.2; }
 }
 .goal .turnstile { color: var(--accent); }
 
+/* What `grind?` / `simp?` reported: a proof, so it is styled as code and marked
+   as the good news it is rather than as one more diagnostic. */
+.suggestion {
+  font-family: var(--mono); font-size: 13.5px; line-height: 1.5;
+  background: var(--code-bg); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 10px;
+  padding: 9px 12px; margin: 0 0 8px; white-space: pre-wrap; overflow-x: auto;
+}
+
 details.hint, details.solution {
   border: 1px solid var(--line); border-radius: 12px;
   background: var(--surface); padding: 0 13px;

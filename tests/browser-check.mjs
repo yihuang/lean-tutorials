@@ -147,6 +147,18 @@ try {
         lesson: lesson('intro'), tactics: 'intro hp hq\nexact hq',
         expect: (r) => !r.ok && r.messages.some((m) => m.line === 2),
       },
+      {
+        name: 'grind? reports the proof it found',
+        lesson: lesson('grind'), tactics: 'grind?',
+        expect: (r) => r.ok && r.suggestions.length === 1
+          && /^Try this:\s*grind/.test(r.suggestions[0]) && !r.suggestions[0].includes('[apply]'),
+      },
+      {
+        name: 'simp? reports the budget it used',
+        lesson: lesson('simp-ask'), tactics: 'simp?',
+        expect: (r) => r.ok && r.suggestions.length === 1
+          && /^Try this:\s*simp only \[/.test(r.suggestions[0]) && !r.suggestions[0].includes('[apply]'),
+      },
     ];
     const results = [];
     for (const entry of cases) {
@@ -219,6 +231,33 @@ try {
     && success.nextVisible && /^Next:/.test(success.nextLabel) && success.navAccented && success.titleSize >= 16;
   if (!uiOk) failures += 1;
   console.log(`${uiOk ? '✓' : '✗'} UI check: ${JSON.stringify(success)}`);
+
+  // A `?` suggestion has to reach the screen, not just the result object: the
+  // whole point of `grind?` is that the reader sees what the search found.
+  await page.evaluate(() => { location.hash = '#/lesson/grind'; });
+  await page.waitForSelector('textarea.editor');
+  await page.fill('textarea.editor', 'grind?');
+  await page.click('button.btn.primary');
+  const suggestionRendered = await page.waitForFunction(
+    () => Boolean(document.querySelector('.suggestion')), null, { timeout: 120000 },
+  ).then(() => true).catch(() => false);
+  const suggestion = await page.evaluate(() => {
+    const block = document.querySelector('.suggestion');
+    return {
+      text: block?.textContent ?? '',
+      captions: [...document.querySelectorAll('.eyebrow')].map((node) => node.textContent),
+      borderLeft: block ? getComputedStyle(block).borderLeftWidth : '',
+      // It must not read as one more thing to fix.
+      inMessageList: Boolean(document.querySelector('.msg-list .msg.information')),
+    };
+  });
+  const suggestionOk = suggestionRendered
+    && /^Try this:\s*grind/.test(suggestion.text)
+    && !suggestion.text.includes('[apply]')
+    && suggestion.captions.includes('Suggested proof')
+    && suggestion.borderLeft === '3px';
+  if (!suggestionOk) failures += 1;
+  console.log(`${suggestionOk ? '✓' : '✗'} UI suggestion: ${JSON.stringify(suggestion)}`);
 
   // The infoview must follow the caret: the goals at the cursor position, with
   // their hypotheses, without any Check press.

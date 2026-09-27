@@ -32,7 +32,7 @@ const failures = [];
 // need the whole Lean runtime; for a colour audit the CSS is all that matters,
 // so the same classes are instantiated for the measurement.
 const LESSON_SELECTORS = [
-  'p', '.lesson-title', '.lesson-sub', '.eyebrow', '.statement', '.goal', '.msg-body',
+  'p', '.lesson-title', '.lesson-sub', '.eyebrow', '.statement', '.goal', '.suggestion', '.msg-body',
   '.btn.primary', '.banner.ok', '.banner.err', '.banner.info', '.footer p', '.chip',
   '.symbols button', '.msg-head span', 'textarea.editor::placeholder',
   '.result.ok .result-title', '.result.ok .result-detail', '.next-chip',

@@ -597,7 +597,7 @@ function renderLesson(lesson) {
     } catch (error) {
       result = {
         ok: false, kind: 'runtime', headline: 'Something went wrong',
-        detail: String(error?.message ?? error), messages: [], goals: [], output: [],
+        detail: String(error?.message ?? error), messages: [], goals: [], suggestions: [], output: [],
       };
     }
     setChecking(false);
@@ -630,6 +630,14 @@ function renderFeedback(container, result, lesson) {
     container.append(h('div', { class: `banner ${tone}` },
       h('span', { text: '✕' }),
       h('span', {}, h('strong', { text: `${result.headline}. ` }), result.detail)));
+  }
+
+  // What `grind?` / `simp?` found: the invocation that reproduces the proof,
+  // shown next to the verdict rather than buried in the output panel. It is a
+  // proof, so it reads as code, not as a message to fix.
+  if (result.suggestions?.length) {
+    container.append(h('p', { class: 'eyebrow', text: 'Suggested proof' }));
+    container.append(...result.suggestions.map((suggestion) => h('pre', { class: 'suggestion', text: suggestion })));
   }
 
   if (result.output?.length) {
