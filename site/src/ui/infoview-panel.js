@@ -81,14 +81,14 @@ export function createInfoviewPanel(options = {}) {
     if (!result) {
       header.querySelector('.dot').dataset.state = 'idle';
       badge.textContent = '';
-      body.append(h('p', { class: 'infoview-note', text: 'Move the cursor into your proof to see the goals there.' }));
+      body.append(h('p', { class: 'infoview-note', text: options.idleText ?? 'Move the cursor into your proof to see the goals there.' }));
       return;
     }
 
     const state = result.status;
     header.querySelector('.dot').dataset.state = state;
     if (state === 'goals') {
-      title.textContent = result.line === null ? 'Goals' : `Goals at line ${result.line + 1}`;
+      title.textContent = result.line === null || options.showLine === false ? 'Goals' : `Goals at line ${result.line + 1}`;
       badge.textContent = `${result.goals.length} open`;
     } else if (state === 'complete') {
       title.textContent = 'No goals';

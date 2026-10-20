@@ -290,6 +290,44 @@ textarea.editor::placeholder {
   opacity: 1;
 }
 
+/* ------------------------------------------------------------ block editor */
+
+/* The Blockly workspace is its own panel, shaped like the text editor: a header
+   from the lesson page, the workspace, and the Lean it produces underneath.
+   Blockly injects its own CSS; only the container and the output strip are ours. */
+.blocks-wrap {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden; box-shadow: var(--shadow);
+}
+.blocks-stage { position: relative; }
+
+.blockly-workspace { width: 100%; height: 340px; }
+@media (max-width: 600px) { .blockly-workspace { height: 320px; } }
+.blocks-loading {
+  position: absolute; inset: 0; z-index: 1; margin: 0;
+  display: grid; place-items: center; padding: 16px; text-align: center;
+  background: var(--surface); color: var(--muted); font-size: 14px;
+}
+.blocks-loading[data-state="error"] { color: var(--err); }
+/* `display: grid` above would beat the user-agent rule for [hidden], which is
+   how the loading overlay once stayed on top of a perfectly good workspace. */
+.blocks-loading[hidden] { display: none; }
+.blocks-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--warn); }
+.lean-output { border-top: 1px solid var(--line); background: var(--surface-2); }
+.lean-output > summary {
+  cursor: pointer; padding: 9px 12px; font-size: 12px; font-weight: 650;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.lean-code {
+  margin: 0; padding: 10px 12px 12px; max-height: 190px; overflow: auto;
+  background: var(--code-bg); color: var(--text);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+  white-space: pre; tab-size: 2;
+}
+.lean-code[data-empty="true"]::before { content: 'No tactics yet — drag a block from the palette into the workspace.'; color: var(--muted); }
+.block-problem { margin: 0; padding: 8px 12px; background: var(--err-soft); color: var(--err); font-size: 13px; }
+.block-problem[hidden] { display: none; }
+
 /* --------------------------------------------------------------- infoview */
 
 /* Goals at the cursor. On a phone the panel sits directly above the editor —
@@ -361,7 +399,16 @@ textarea.editor::placeholder {
   .workbench .workbench-main { order: 1; min-width: 0; }
   .workbench .infoview { order: 2; position: sticky; top: 68px; }
   .infoview-body { max-height: 62vh; }
+
+  /* A block proof uses one column: the goals become a full-width strip above
+     the workspace, and the workspace gets the width the goal sidebar used to
+     take. Two goals then sit side by side instead of stacking. */
+  .workbench.workbench-blocks { grid-template-columns: minmax(0, 1fr); }
+  .workbench.workbench-blocks .infoview { order: 1; position: static; top: auto; }
+  .workbench.workbench-blocks .workbench-main { order: 2; }
+  .workbench.workbench-blocks .infoview-body { max-height: min(30vh, 240px); }
 }
+.workbench-blocks .goal-list { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 
 /* --------------------------------------------------------------- controls */
 
@@ -622,6 +669,12 @@ html[data-focus="true"] .infoview-body {
   overflow: auto; overscroll-behavior: contain;
 }
 
+/* The block game's sheet also carries a palette and the generated Lean; give the
+   workspace the difference by letting the goals scroll inside a shorter panel. */
+html[data-focus="true"] .workbench-blocks .infoview {
+  flex: 0 1 auto; min-height: 44px; max-height: min(24dvh, 210px);
+}
+
 /* The editor takes what is left. The wrap keeps a floor so a short sheet (soft
    keyboard) can never clip the textarea or push the actions row off screen. */
 html[data-focus="true"] .editor-wrap {
@@ -629,6 +682,16 @@ html[data-focus="true"] .editor-wrap {
   display: flex; flex-direction: column;
 }
 html[data-focus="true"] textarea.editor { flex: 1 1 auto; min-height: 48px; resize: none; }
+
+/* The block editor gets the same treatment: the workspace takes the sheet, and
+   the generated Lean stays a bounded strip so Check remains reachable. */
+html[data-focus="true"] .blocks-wrap {
+  flex: 1 1 auto; min-height: 180px;
+  display: flex; flex-direction: column;
+}
+html[data-focus="true"] .blocks-stage { flex: 1 1 auto; min-height: 160px; }
+html[data-focus="true"] .blockly-workspace { height: 100%; min-height: 160px; }
+html[data-focus="true"] .lean-output { flex: none; max-height: min(26dvh, 200px); overflow: auto; }
 
 html[data-focus="true"] .actions {
   flex: none; position: static; margin: 0; padding: 0;
@@ -650,6 +713,13 @@ html[data-focus="true"] .feedback {
   html[data-focus="true"] .workbench { flex-direction: row; align-items: stretch; }
   html[data-focus="true"] .workbench .infoview { order: 2; position: static; flex: 0 1 340px; max-height: none; min-height: 0; }
   html[data-focus="true"] .workbench .workbench-main { order: 1; }
+  /* The block game keeps its goals above the workspace even in focus mode: the
+     block tree is the thing that needs every pixel of width. */
+  html[data-focus="true"] .workbench.workbench-blocks { flex-direction: column; }
+  html[data-focus="true"] .workbench.workbench-blocks .infoview {
+    order: 1; flex: 0 1 auto; min-height: 44px; max-height: min(24dvh, 210px);
+  }
+  html[data-focus="true"] .workbench.workbench-blocks .workbench-main { order: 2; }
 }
 
 /* The way into the mode, in the editor's own header (unchanged outside it). */

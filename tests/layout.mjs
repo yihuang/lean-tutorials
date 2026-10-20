@@ -213,6 +213,89 @@ check(longHyp.scrollWidth <= longHyp.clientWidth + 1, 'infoview wraps long hypot
   `${longHyp.scrollWidth}px of ${longHyp.clientWidth}px`);
 await page.click('.infoview-toggle');
 
+// ------------------------------------------------------------- block lesson
+// The Blockly game on a phone: the workspace has to fit, the generated Lean has
+// to be readable, and the sticky Check button has to stay reachable. This runs
+// against dist/, so it also proves the vendored Blockly files were copied.
+await page.evaluate(() => { location.hash = '#/lesson/nng-zero-add'; });
+await page.waitForSelector('.blockly-workspace svg.blocklySvg', { timeout: 30000 });
+await page.waitForFunction(() => (document.querySelector('.lean-code')?.textContent ?? '').includes('induction'), null, { timeout: 30000 });
+await page.waitForFunction(
+  () => getComputedStyle(document.querySelector('.blocklyToolboxFlyout')).display !== 'none',
+  null,
+  { timeout: 10000 },
+);
+await overflow('block lesson');
+const blockLesson = await page.evaluate(() => {
+  const workspace = document.querySelector('.blockly-workspace');
+  const block = document.querySelector('.blockly-workspace .blocklySvg .blocklyBlockCanvas g.blocklyDraggable');
+  const loading = document.querySelector('.blocks-loading');
+  const check = document.querySelector('.actions .btn.primary:not(.next-step)');
+  const lean = document.querySelector('.lean-code');
+  const rect = (node) => {
+    const box = node.getBoundingClientRect();
+    return { top: Math.round(box.top), bottom: Math.round(box.bottom), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height) };
+  };
+  return {
+    workspace: rect(workspace),
+    block: block ? rect(block) : null,
+    loading: loading ? getComputedStyle(loading).display : 'missing',
+    lean: (lean?.textContent ?? '').trim(),
+    leanHeight: lean ? Math.round(lean.getBoundingClientRect().height) : 0,
+    checkHeight: check ? Math.round(check.getBoundingClientRect().height) : 0,
+    actions: getComputedStyle(document.querySelector('.actions')).position,
+    infoview: rect(document.querySelector('.infoview')),
+    palette: (() => {
+      const flyout = document.querySelector('.blocklyToolboxFlyout');
+      return flyout ? { display: getComputedStyle(flyout).display, ...rect(flyout) } : null;
+    })(),
+    paletteBlocks: [...document.querySelectorAll('.blocklyToolboxFlyout .blocklyDraggable')].map((node) => ({
+      text: node.textContent.slice(0, 20),
+      height: Math.round(node.getBoundingClientRect().height),
+    })),
+  };
+});
+check(blockLesson.workspace.width >= 300 && blockLesson.workspace.height >= 320,
+  'block lesson: the workspace fills a phone', `${blockLesson.workspace.width}×${blockLesson.workspace.height}`);
+check(blockLesson.infoview.bottom <= blockLesson.workspace.top + 1,
+  'block lesson: the goals sit above the workspace, at full width',
+  `goals end at ${blockLesson.infoview.bottom}px, workspace starts at ${blockLesson.workspace.top}px`);
+check(blockLesson.loading === 'none', 'block lesson: the loading overlay is gone once Blockly is up', blockLesson.loading);
+check(blockLesson.block !== null && blockLesson.block.right <= blockLesson.workspace.right + 1,
+  'block lesson: the starter block fits the workspace',
+  blockLesson.block ? `block ${blockLesson.block.left}–${blockLesson.block.right}px in ${blockLesson.workspace.left}–${blockLesson.workspace.right}px` : 'no block');
+check(/^induction n with/m.test(blockLesson.lean) && blockLesson.leanHeight > 40,
+  'block lesson: the generated Lean is shown under the workspace', `${blockLesson.leanHeight}px`);
+check(blockLesson.checkHeight >= 44 && blockLesson.actions === 'sticky',
+  'block lesson: Check stays a 44px sticky target', `${blockLesson.checkHeight}px, ${blockLesson.actions}`);
+check(blockLesson.palette?.display === 'block' && blockLesson.paletteBlocks.length >= 2
+  && blockLesson.paletteBlocks.every((block) => block.height >= 40),
+  'block lesson: the palette is open and shows real block shapes',
+  blockLesson.paletteBlocks.map((block) => `${block.text} ${block.height}px`).join(', '));
+
+// The palette has to drag: paint -> pick up a real block -> drop it in the
+// canvas. This is the interaction the HTML chip strip could not provide.
+await page.locator('.blocks-wrap').scrollIntoViewIfNeeded();
+const paletteRfl = await page.locator('.blocklyToolboxFlyout .blocklyDraggable').nth(1).boundingBox();
+const blockCanvas = await page.locator('.blockly-workspace').boundingBox();
+const leanBeforeDrag = blockLesson.lean;
+await page.mouse.move(paletteRfl.x + paletteRfl.width / 2, paletteRfl.y + paletteRfl.height / 2);
+await page.mouse.down();
+await page.mouse.move(blockCanvas.x + blockCanvas.width * 0.55, blockCanvas.y + blockCanvas.height - 30, { steps: 12 });
+await page.mouse.up();
+await page.waitForFunction(
+  (before) => (document.querySelector('.lean-code')?.textContent ?? '') !== before,
+  leanBeforeDrag,
+  { timeout: 10000 },
+);
+const dragged = await page.evaluate(() => ({
+  lean: document.querySelector('.lean-code')?.textContent ?? '',
+  flyout: getComputedStyle(document.querySelector('.blocklyToolboxFlyout')).display,
+}));
+check(/^\s*rfl$/m.test(dragged.lean) && dragged.flyout === 'none',
+  'block lesson: dragging a block from the palette adds it (and the flyout closes on a phone)',
+  JSON.stringify({ lean: dragged.lean, flyout: dragged.flyout }));
+
 // ---------------------------------------------------------------- focus mode
 // The immersive editing mode, measured at 390x844 — the size where "it works on
 // my laptop" stops being evidence. This is the layout half; browser-check.mjs
@@ -459,6 +542,29 @@ await page.goto(`${base}/#/lesson/and`, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('textarea.editor');
 const desktopPosition = await page.evaluate(() => getComputedStyle(document.querySelector('.actions')).position);
 check(desktopPosition === 'static', 'desktop: actions stay inline', desktopPosition);
+
+// On a wide screen the block lesson stays one column: goals on top, the whole
+// card width for the workspace (the two-column layout is for the text editor).
+await page.goto(`${base}/#/lesson/nng-zero-add`, { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('.blockly-workspace svg.blocklySvg', { timeout: 30000 });
+const desktopBlocks = await page.evaluate(() => {
+  const box = (selector) => {
+    const r = document.querySelector(selector).getBoundingClientRect();
+    return { top: Math.round(r.top), bottom: Math.round(r.bottom), width: Math.round(r.width) };
+  };
+  return {
+    infoview: box('.infoview'),
+    workspace: box('.blockly-workspace'),
+    palette: Boolean(document.querySelector('.blocklyToolboxFlyout')),
+  };
+});
+check(desktopBlocks.workspace.width >= 620,
+  'block lesson: desktop gives the blocks the card width', `${desktopBlocks.workspace.width}px`);
+check(desktopBlocks.infoview.bottom <= desktopBlocks.workspace.top + 1
+  && desktopBlocks.infoview.width >= desktopBlocks.workspace.width - 4,
+  'block lesson: desktop goals are a full-width strip above the workspace',
+  `goals ${desktopBlocks.infoview.width}px ending at ${desktopBlocks.infoview.bottom}px; workspace starts at ${desktopBlocks.workspace.top}px`);
+check(desktopBlocks.palette, 'block lesson: the palette stays visible on desktop, without a category click');
 
 // Dark mode renders and keeps contrast (spot check on the body background).
 await page.emulateMedia({ colorScheme: 'dark' });

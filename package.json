@@ -19,6 +19,7 @@
     "prepare:runtime": "node scripts/fetch-runtime.mjs && node scripts/pack-core-layer.mjs"
   },
   "devDependencies": {
+    "blockly": "^13.4.0",
     "playwright-core": "^1.63.0"
   }
 }

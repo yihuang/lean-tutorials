@@ -402,6 +402,142 @@ try {
     console.log(`${leftOk ? '✓' : '✗'} focus mode: Esc exits, the page returns and the choice is remembered as off — ${JSON.stringify(left)}`);
   }
 
+  // --- The Blockly game, against the real runtime ---------------------------
+  // Two passes: the first level (one block) proves that the editor -> generator
+  // -> kernel path works at all; the induction level proves the interesting part,
+  // an empty branch is reported as open goals and the shipped solution verifies.
+  {
+    const blockLesson = await page.evaluate(() => {
+      const lesson = window.leanTutorials.content.LESSONS.find((entry) => entry.blocks && !entry.blocks.starter);
+      return lesson ? { id: lesson.id, solution: lesson.solution, palette: lesson.blocks.palette } : null;
+    });
+    if (!blockLesson) {
+      failures += 1;
+      console.log('✗ block game: no block lesson without a starter was found');
+    } else {
+      await page.evaluate((id) => { location.hash = `#/lesson/${id}`; }, blockLesson.id);
+      await page.waitForSelector('.blockly-workspace svg.blocklySvg', { timeout: 120000 });
+      // Load the shipped block solution (the layout suite covers dragging a
+      // block out of the real palette).
+      await page.locator('details.solution summary').click();
+      await page.getByRole('button', { name: 'Build it from blocks' }).click();
+      await page.waitForFunction(
+        (expected) => document.querySelector('.lean-code')?.textContent?.trim() === expected.trim(),
+        blockLesson.solution,
+        { timeout: 120000 },
+      );
+      const generated = await page.locator('.lean-code').textContent();
+      await page.click('.actions .btn.primary:not(.next-step)');
+      await page.waitForFunction(
+        () => document.querySelector('.result.ok, .banner.err, .banner.warn'),
+        null,
+        { timeout: 120000 },
+      );
+      const verdict = await page.evaluate(() => ({
+        ok: Boolean(document.querySelector('.result.ok')),
+        headline: document.querySelector('.result-title')?.textContent ?? '',
+        check: document.querySelector('.actions .btn.primary:not(.next-step)')?.textContent ?? '',
+        leanPanel: document.querySelector('.lean-code')?.textContent ?? '',
+      }));
+      const oneBlockOk = verdict.ok && verdict.headline === 'Proof verified'
+        && verdict.check.includes('✓') && verdict.leanPanel.trim() === blockLesson.solution.trim();
+      if (!oneBlockOk) failures += 1;
+      console.log(`${oneBlockOk ? '✓' : '✗'} block game: one block (${blockLesson.id}) — ${JSON.stringify(verdict)} ` +
+        `(editor produced ${JSON.stringify(generated.trim())})`);
+    }
+
+    const inductionLesson = await page.evaluate(() => {
+      const lesson = window.leanTutorials.content.LESSONS.find((entry) => entry.blocks?.starter?.length);
+      return lesson ? { id: lesson.id, solution: lesson.solution } : null;
+    });
+    if (!inductionLesson) {
+      failures += 1;
+      console.log('✗ block game: no block lesson with a starter was found');
+    } else {
+      await page.evaluate((id) => { location.hash = `#/lesson/${id}`; }, inductionLesson.id);
+      await page.waitForSelector('.blockly-workspace svg.blocklySvg', { timeout: 120000 });
+      await page.waitForFunction(() => (document.querySelector('.lean-code')?.textContent ?? '').includes('skip'), null, { timeout: 120000 });
+      // The starter splits the goal and leaves both branches empty; the live
+      // goal panel must show the two branches before Check is pressed.
+      await page.waitForFunction(
+        () => document.querySelectorAll('.infoview .goal-card').length === 2,
+        null,
+        { timeout: 60000 },
+      );
+      // Check must report the open goals, not accept the half-built proof.
+      await page.click('.actions .btn.primary:not(.next-step)');
+      await page.waitForFunction(
+        () => document.querySelector('.result.ok, .banner.err, .banner.warn'),
+        null,
+        { timeout: 120000 },
+      );
+      const half = await page.evaluate(() => ({
+        errors: Boolean(document.querySelector('.banner.err')),
+        text: document.querySelector('.banner.err')?.textContent ?? '',
+        goals: document.querySelectorAll('.infoview .goal-card').length,
+        leanPanel: document.querySelector('.lean-code')?.textContent ?? '',
+      }));
+      const halfOk = half.errors && /not finished/i.test(half.text) && half.goals === 2 && /skip/.test(half.leanPanel);
+      if (!halfOk) failures += 1;
+      console.log(`${halfOk ? '✓' : '✗'} block game: an unfinished induction is refused with its ${half.goals} goals — ${JSON.stringify({ ...half, leanPanel: undefined })}`);
+
+      // Build the shipped solution from blocks, then let the same Check button
+      // verify the generated Lean.
+      await page.locator('details.solution summary').click();
+      await page.getByRole('button', { name: 'Build it from blocks' }).click();
+      await page.waitForFunction(
+        (expected) => document.querySelector('.lean-code')?.textContent?.trim() === expected.trim(),
+        inductionLesson.solution,
+        { timeout: 120000 },
+      );
+      await page.click('.actions .btn.primary:not(.next-step)');
+      await page.waitForSelector('.result.ok', { timeout: 120000 });
+      const done = await page.evaluate(() => ({
+        headline: document.querySelector('.result-title')?.textContent ?? '',
+        leanPanel: document.querySelector('.lean-code')?.textContent ?? '',
+        check: document.querySelector('.actions .btn.primary:not(.next-step)')?.textContent ?? '',
+      }));
+      const doneOk = done.headline === 'Proof verified' && done.check.includes('✓')
+        && done.leanPanel.trim() === inductionLesson.solution.trim();
+      if (!doneOk) failures += 1;
+      console.log(`${doneOk ? '✓' : '✗'} block game: the solution blocks check as Lean (${inductionLesson.id}) — ` +
+        `${JSON.stringify({ headline: done.headline, check: done.check })}`);
+    }
+
+    // The stepwise level: `apply` + `refine` leaves one goal at a time (refine
+    // gets a pair with a `?_` hole), so the goal panel can move from the
+    // existential to its property without a two-hole pair block.
+    const stepwiseLesson = await page.evaluate(() => {
+      const lesson = window.leanTutorials.content.LESSONS.find((entry) => entry.blocks?.names?.length);
+      return lesson ? { id: lesson.id, solution: lesson.solution } : null;
+    });
+    if (!stepwiseLesson) {
+      failures += 1;
+      console.log('✗ block game: no stepwise apply/refine lesson was found');
+    } else {
+      await page.evaluate((id) => { location.hash = `#/lesson/${id}`; }, stepwiseLesson.id);
+      await page.waitForSelector('.blockly-workspace svg.blocklySvg', { timeout: 120000 });
+      await page.locator('details.solution summary').click();
+      await page.getByRole('button', { name: 'Build it from blocks' }).click();
+      await page.waitForFunction(
+        (expected) => document.querySelector('.lean-code')?.textContent?.trim() === expected.trim(),
+        stepwiseLesson.solution,
+        { timeout: 120000 },
+      );
+      await page.click('.actions .btn.primary:not(.next-step)');
+      await page.waitForSelector('.result.ok', { timeout: 120000 });
+      const stepwiseDone = await page.evaluate(() => ({
+        headline: document.querySelector('.result-title')?.textContent ?? '',
+        leanPanel: document.querySelector('.lean-code')?.textContent ?? '',
+      }));
+      const stepwiseOk = stepwiseDone.headline === 'Proof verified'
+        && stepwiseDone.leanPanel.trim() === stepwiseLesson.solution.trim();
+      if (!stepwiseOk) failures += 1;
+      console.log(`${stepwiseOk ? '✓' : '✗'} block game: stepwise apply/refine (${stepwiseLesson.id}) — ` +
+        `${JSON.stringify({ headline: stepwiseDone.headline })}`);
+    }
+  }
+
   // A file lesson (kind 'file'): the output panel must show what Lean printed,
   // and the verdict must not claim a proof was verified.
   await page.evaluate(() => { location.hash = '#/lesson/check'; });
@@ -484,14 +620,17 @@ try {
   // now), sample the progress text, and check what it claims.
   const samples = [];
   await page.reload({ waitUntil: 'domcontentloaded' });
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // 50 ms on purpose: with a warm cache, unpacking five packs takes ~200 ms on a
+  // fast laptop, and a 300 ms sampler stepped straight over the cached wording
+  // and failed the check on a machine that was merely quick.
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
     const line = await page.evaluate(() => {
       const engine = window.leanTutorials?.engine;
       return engine ? `${engine.state}|${engine.progress.message}` : null;
     });
     if (line && samples.at(-1) !== line) samples.push(line);
     if (line?.startsWith('ready')) break;
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(50);
   }
   const claimedDownload = samples.filter((line) => line.includes('Downloading the Lean core'));
   const compiled = samples.some((line) => line.includes('compiling WebAssembly'));

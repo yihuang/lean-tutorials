@@ -14,6 +14,12 @@
 /src/*
   Cache-Control: public, max-age=300
 
+# Blockly is a pinned npm dependency vendored at build time. The JS and messages
+# are requested with ?v=<version>, but Blockly's media files are addressed by
+# name, so the whole tree gets a day rather than `immutable`.
+/vendor/blockly/*
+  Cache-Control: public, max-age=86400
+
 # The runtime is pinned by `?v=<release>` (see site/src/lean/config.js) and is
 # immutable for a given version: the app requests every runtime URL with that
 # query, so a version bump changes the URL instead of serving stale bytes.
