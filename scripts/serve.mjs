@@ -8,7 +8,7 @@
 // with a 404 status, and the app shell for extensionless paths.
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -18,6 +18,7 @@ const argValue = (name, fallback) => {
 const root = resolve(argValue('dir', 'site'));
 const port = Number(argValue('port', process.env.PORT || 8788));
 const logBytes = args.includes('--log-bytes');
+const VENDOR_BLOCKLY = '/vendor/blockly/';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -31,6 +32,9 @@ const TYPES = {
   '.wasm': 'application/wasm',
   '.pack': 'application/octet-stream',
   '.txt': 'text/plain; charset=utf-8',
+  '.mp3': 'audio/mpeg',
+  '.gif': 'image/gif',
+  '.cur': 'image/x-icon',
 };
 
 function runtimeHeaders(extra = {}) {
@@ -54,6 +58,17 @@ const server = createServer((req, res) => {
 
   let filePath = resolve(join(root, normalize(pathname)));
   if (!filePath.startsWith(root)) { res.writeHead(403).end('forbidden'); return; }
+
+  // Blockly is a build-time dependency, not a committed one. `dist` has the
+  // vendored copy; when serving `site` directly, resolve the same URLs from
+  // node_modules so `npm run dev` needs no extra prepare step.
+  if (!existsSync(filePath) && pathname.startsWith(VENDOR_BLOCKLY)) {
+    const vendorRoot = resolve(join(root, '..', 'node_modules', 'blockly'));
+    const candidate = resolve(join(vendorRoot, pathname.slice(VENDOR_BLOCKLY.length)));
+    if ((candidate === vendorRoot || candidate.startsWith(vendorRoot + sep)) && existsSync(candidate)) {
+      filePath = candidate;
+    }
+  }
   if (existsSync(filePath) && statSync(filePath).isDirectory()) filePath = join(filePath, 'index.html');
 
   if (!existsSync(filePath)) {

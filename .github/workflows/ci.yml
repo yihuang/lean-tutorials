@@ -51,6 +51,11 @@ jobs:
           test -f dist/404.html
           test -f dist/lean-worker.worker.js
           test -f dist/src/lean/config.js
+          # The block game's editor is vendored at build time; a text lesson must
+          # never need it, but a block lesson is broken without it.
+          test -f dist/vendor/blockly/blockly_compressed.js
+          test -f dist/vendor/blockly/msg/en.js
+          test -f dist/vendor/blockly/media/sprites.svg
           grep -q "Cross-Origin-Embedder-Policy" dist/_headers
           # Nothing may exceed Cloudflare Pages' 25 MB per-file limit.
           big=$(find dist -type f -size +25M)
@@ -220,6 +225,10 @@ jobs:
           type=$(curl -sI --max-time 60 "$url/lean-wasm/$first" | tr -d '\r' | grep -i '^content-type' || true)
           echo "$type" | grep -qi 'text/html' && { echo "::error::$first is served as HTML"; exit 1; }
           fetch "$url/lean-wasm/core-layer.json" || { echo "::error::core-layer.json is missing"; exit 1; }
+          # The Blockly bundle is lazy-loaded, so the app shell can be healthy
+          # while a block lesson 404s. Assert it on the deployment itself.
+          fetch "$url/vendor/blockly/blockly_compressed.js" /tmp/blockly.js || { echo "::error::the Blockly bundle is missing"; exit 1; }
+          [ "$(wc -c < /tmp/blockly.js)" -gt 100000 ] || { echo "::error::the Blockly bundle is truncated"; exit 1; }
           # An unknown runtime path must stay a 404 (a rewrite would serve HTML instead).
           # 000/5xx are propagation noise; a 2xx is the regression this guards against.
           code=000

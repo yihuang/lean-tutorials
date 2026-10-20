@@ -22,7 +22,7 @@
 
 import { buildSource, GOAL_TRACE_MARKER } from './source.js';
 import { locate, parseOutput } from './diagnostics.js';
-import { formatGoal, goalsFromDiagnostics } from './goals.js';
+import { formatGoal, goalsFromDiagnostics, goalsFromText } from './goals.js';
 
 /**
  * @typedef {Object} ProbeEngine
@@ -84,6 +84,9 @@ function oneLine(text) {
 // pair. That is fixed at the source and pinned by a regression test in
 // tests/unit.test.mjs, so this module keeps a single owner for the protocol:
 // goals.js.
+
+const isUnsolvedGoals = (diagnostic) => (diagnostic.kind || '').includes('unsolvedGoals')
+  || /unsolved goals/i.test(diagnostic.message);
 
 /** @param {import('./diagnostics.js').RawDiagnostic[]} diagnostics */
 function firstErrorMessage(diagnostics) {
@@ -182,7 +185,13 @@ export class GoalProbe {
       if (this._superseded(token)) return this._stale(requestedLine, started);
 
       const diagnostics = locate(parseOutput(run.output ?? []), source);
-      const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+      // An empty branch of a block proof is compiled as `skip`, and Lean
+      // reports the goal it leaves open as an error *at the skip line* even
+      // though the preview wrapper later closes it with an axiom. That is not
+      // a rejected prefix: the compile succeeded and the trace is what we
+      // asked for. Treat only the other errors as a reason to back off.
+      const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error'
+        && !isUnsolvedGoals(diagnostic));
       if (!run.success && errors.length === 0) {
         // Not a truncation problem: the runtime itself failed, and backing off
         // would only repeat that failure against a different prefix.
@@ -201,8 +210,15 @@ export class GoalProbe {
       }
 
       // The shared extractor first (it is what the checker uses); the armed walk
-      // is the same handshake with the merged-trace shape handled.
-      const goals = goalsFromDiagnostics(diagnostics, GOAL_TRACE_MARKER).map(formatGoal);
+      // is the same handshake with the merged-trace shape handled. A branch held
+      // open by `skip` can make Lean report its goal state as an "unsolved goals"
+      // diagnostic instead of running the later trace wrapper; the checker reads
+      // that shape too, so the panel is never blank while a goal is visibly open.
+      let goals = goalsFromDiagnostics(diagnostics, GOAL_TRACE_MARKER).map(formatGoal);
+      if (goals.length === 0) {
+        goals = [...new Set(diagnostics.filter(isUnsolvedGoals).flatMap((diagnostic) => goalsFromText(diagnostic.message)))]
+          .map(formatGoal);
+      }
       const result = makeResult({
         status: goals.length > 0 ? 'goals' : 'complete',
         requestedLine,

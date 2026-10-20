@@ -294,3 +294,27 @@ test('a newer probe supersedes an older in-flight one', async () => {
   assert.equal(probe.stats.probes, 2);
   assert.equal(probe.stats.stale, 1);
 });
+
+test('an empty block branch is reported as a goal, not as a rejected prefix', async () => {
+  // The block compiler writes `skip` into an empty branch. Lean answers the
+  // preview compile with an "unsolved goals" diagnostic at that line instead of
+  // running the later trace wrapper; the panel must still show the branch goal.
+  const engine = scriptedEngine(() => ({
+    success: true,
+    output: [diagnostic({
+      severity: 'error',
+      kind: 'unsolvedGoals',
+      data: 'unsolved goals\ncase zero\n⊢ 0 + 0 = 0',
+      pos: { line: 2, column: 3 },
+    })],
+  }));
+  const probe = new GoalProbe(engine);
+  const result = await probe.goalsAt(
+    { id: 'block-level', statement: 'example (n : Nat) : 0 + n = n' },
+    'induction n with\n| zero =>\n  skip\n| succ k ih =>\n  skip',
+    4,
+  );
+  assert.equal(result.status, 'goals');
+  assert.equal(result.goals.length, 1);
+  assert.match(result.goals[0], /0 \+ 0 = 0/);
+});

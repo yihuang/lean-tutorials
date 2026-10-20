@@ -32,9 +32,9 @@ const to = join(root, 'dist');
 const runtimeSrc = join(from, 'lean-wasm');
 const runtimeOut = join(to, 'lean-wasm');
 
-function fail(message) {
+function fail(message, fix = 'npm run prepare:runtime   (downloads the pinned runtime and packs the core layer)') {
   console.error(`\nbuild failed: ${message}`);
-  console.error('Fix: npm run prepare:runtime   (downloads the pinned runtime and packs the core layer)\n');
+  console.error(`Fix: ${fix}\n`);
   process.exit(1);
 }
 
@@ -52,13 +52,27 @@ cpSync(from, to, {
   filter: (src) => src !== runtimeSrc && !src.startsWith(runtimeSrc + '/'),
 });
 
-// 2. Runtime pieces that are small enough to be static assets.
+// 2. Blockly, vendored from the pinned dependency. It is a build-time asset (the
+//    site imports no npm package at runtime), so the copies live under /vendor
+//    and the browser only loads them on a lesson that uses blocks.
+const blocklySource = join(root, 'node_modules', 'blockly');
+if (!existsSync(join(blocklySource, 'blockly_compressed.js'))) {
+  fail('node_modules/blockly is missing', 'npm ci   (installs the pinned Blockly dependency)');
+}
+const blocklyOut = join(to, 'vendor', 'blockly');
+mkdirSync(join(blocklyOut, 'msg'), { recursive: true });
+cpSync(join(blocklySource, 'blockly_compressed.js'), join(blocklyOut, 'blockly_compressed.js'));
+cpSync(join(blocklySource, 'msg', 'en.js'), join(blocklyOut, 'msg', 'en.js'));
+cpSync(join(blocklySource, 'media'), join(blocklyOut, 'media'), { recursive: true });
+if (existsSync(join(blocklySource, 'LICENSE'))) cpSync(join(blocklySource, 'LICENSE'), join(blocklyOut, 'LICENSE'));
+
+// 3. Runtime pieces that are small enough to be static assets.
 mkdirSync(runtimeOut, { recursive: true });
 cpSync(join(runtimeSrc, 'lean.js'), join(runtimeOut, 'lean.js'));
 cpSync(join(runtimeSrc, 'core-layer.json'), join(runtimeOut, 'core-layer.json'));
 cpSync(join(runtimeSrc, 'core-lib'), join(runtimeOut, 'core-lib'), { recursive: true });
 
-// 3. lean.wasm, split deterministically into chunks.
+// 4. lean.wasm, split deterministically into chunks.
 const wasm = readFileSync(join(runtimeSrc, WASM_SOURCE));
 const chunks = [];
 for (let offset = 0, index = 0; offset < wasm.length; offset += CHUNK_BYTES, index += 1) {

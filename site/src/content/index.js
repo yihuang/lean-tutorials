@@ -29,6 +29,7 @@
 // validateContent() below is the executable version of this comment; tests/unit
 // runs it, so content that breaks the contract cannot be committed.
 
+import { numberGame } from './topics/number-game.js';
 import { foundations } from './topics/foundations.js';
 import { logic } from './topics/logic.js';
 import { quantifiers } from './topics/quantifiers.js';
@@ -41,6 +42,7 @@ import { specifications } from './topics/specifications.js';
 import { loopInvariants } from './topics/loop-invariants.js';
 import { termination } from './topics/termination.js';
 import { refinement } from './topics/refinement.js';
+import { naturalNumberGame } from './themes/natural-number-game.js';
 import { proofBasics } from './themes/proof-basics.js';
 import { programVerification } from './themes/program-verification.js';
 import {
@@ -49,12 +51,12 @@ import {
 
 /** Order matters: it is the reading order and the "next lesson" order. */
 export const TOPICS = [
-  foundations, logic, quantifiers, numbers, rewriting, automation, advancedTactics, tools,
+  numberGame, foundations, logic, quantifiers, numbers, rewriting, automation, advancedTactics, tools,
   specifications, loopInvariants, termination, refinement,
 ];
 
 /** Themes in reading order: the ones with material first, then the roadmap. */
-export const THEMES = [proofBasics, programVerification, functionalProgramming, dataStructures, maths, metaprogramming];
+export const THEMES = [naturalNumberGame, proofBasics, programVerification, functionalProgramming, dataStructures, maths, metaprogramming];
 
 const byLessonId = new Map();
 const byTopicId = new Map();
@@ -243,6 +245,50 @@ export function validateContent(options = {}) {
       }
       if (lesson.forbid && !Array.isArray(lesson.forbid)) problems.push(`${where}: forbid must be an array`);
       if (lesson.require && !Array.isArray(lesson.require)) problems.push(`${where}: require must be an array`);
+
+      // A block lesson is still a tactic lesson: the block program compiles to
+      // the same tactic block the text editor would hold, and `solution` is the
+      // Lean text that program produces. The shape is checked here; whether the
+      // blocks mean anything is the mechanism's job (and Lean's).
+      if (lesson.blocks) {
+        if (kind !== 'tactic') problems.push(`${where}: 'blocks' only applies to a tactic lesson`);
+        const blocks = lesson.blocks;
+        if (!Array.isArray(blocks.palette) || blocks.palette.length === 0
+          || blocks.palette.some((name) => typeof name !== 'string' || name.trim() === '')) {
+          problems.push(`${where}: blocks.palette must be a non-empty array of block names`);
+        }
+        const checkStack = (stack, at) => {
+          if (!Array.isArray(stack)) { problems.push(`${at}: a block stack must be an array`); return; }
+          for (const node of stack) {
+            if (!node || typeof node !== 'object' || typeof node.type !== 'string' || node.type === '') {
+              problems.push(`${at}: every block needs a type`);
+              continue;
+            }
+            if (node.fields !== undefined && (typeof node.fields !== 'object' || node.fields === null)) {
+              problems.push(`${at}: ${node.type}.fields must be an object`);
+            }
+            if (node.branches !== undefined) {
+              if (typeof node.branches !== 'object' || node.branches === null) {
+                problems.push(`${at}: ${node.type}.branches must be an object`);
+              } else {
+                for (const [key, body] of Object.entries(node.branches)) checkStack(body, `${at}.${key}`);
+              }
+            }
+          }
+        };
+        if (!Array.isArray(blocks.solution) || blocks.solution.length === 0) {
+          problems.push(`${where}: blocks.solution must be a non-empty block stack`);
+        } else {
+          checkStack(blocks.solution, `${where}.blocks.solution`);
+        }
+        if (blocks.starter !== undefined) checkStack(blocks.starter, `${where}.blocks.starter`);
+        for (const field of ['lemmas', 'names', 'vars', 'binders']) {
+          if (blocks[field] !== undefined
+            && (!Array.isArray(blocks[field]) || blocks[field].some((value) => typeof value !== 'string'))) {
+            problems.push(`${where}: blocks.${field} must be an array of strings`);
+          }
+        }
+      }
       if (/\bsorry\b/.test(lesson.solution)) problems.push(`${where}: solution uses sorry`);
       if (lesson.placeholder.trim() === lesson.solution.trim()) problems.push(`${where}: placeholder must not be the solution`);
       if (lesson.placeholder.trimStart().startsWith('--')) problems.push(`${where}: placeholder must not look like a comment to delete`);

@@ -22,6 +22,42 @@ import content only through `content/index.js`, and it must never branch on a le
 If you find yourself special-casing a lesson, a class name, or a platform quirk in the
 mechanism, stop and put it in the content or in the data.
 
+## The block layer (Blockly)
+
+One theme (`natural-number-game`) is played in a Blockly workspace. Three facts
+matter when changing it:
+
+- **Content declares, the mechanism compiles.** A lesson's `blocks` field holds a
+  palette, the names it may mention (`lemmas`, `names`, `vars`), an optional
+  `starter`, and a `solution` block stack. `site/src/lean/blocks.js` turns that
+  tree into ordinary Lean; `site/src/ui/blocks-editor.js` builds Blockly from the
+  same `BLOCK_SPECS` table. Adding a block means adding its spec (which emits the
+  Lean) and its layout in `definitionFor` (which draws it) — nothing else.
+  The palette is a **real Blockly toolbox** generated from that same `palette`,
+  with `horizontalLayout: true` so it lays the category bar and its flyout across
+  the top of the canvas instead of taking a column of width. It opens
+  automatically on a fresh/almost-empty level, shows the actual block shapes,
+  and supports native drag-and-drop. When a level opens with a saved or shipped
+  proof, the editor keeps the palette closed and calls `workspace.zoomToFit()`
+  so the whole tree is visible at startup instead of being clipped behind the
+  flyout; the palette is one tap away in its category bar. `exact` and the
+  generic `refine` take a term value input, and term blocks (`term_rfl`,
+  `term_var`, `term_or_inl`, `term_or_inr`, `term_pair`, `term_hole`) compose
+  through it by dragging one into the slot. There is no `use` block: the pinned
+  Init has no `use` tactic. Existentials use `refine` with `⟨witness, ?_⟩` (the
+  `?_` hole is a term block), which leaves the property as the next goal — one
+  step at a time, and the same refine+hole pair works for any goal.
+- **The generated Lean is the answer.** `main.js` passes `blocksEditor.getLean()`
+  to the same `checkLesson` as the text editor. Do not add a block-specific
+  verifier: an empty branch compiles to `skip`, and the existing two-pass check
+  (plain + goal-tracing) already distinguishes "open goals" from "proved".
+- **Blockly is a devDependency, not a runtime import.** `scripts/build.mjs`
+  copies `blockly_compressed.js`, `msg/en.js`, `media/` and the licence to
+  `dist/vendor/blockly/`; `scripts/serve.mjs` resolves `/vendor/blockly/*` from
+  `node_modules` when serving `site` directly. The editor is loaded lazily, so a
+  text lesson never downloads it. `tests/blocks.test.mjs` pins the loader's
+  `BLOCKLY_VERSION` to the dependency.
+
 ## Commands
 
 ```bash

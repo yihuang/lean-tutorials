@@ -7,6 +7,7 @@
 import { LeanEngine } from './lean/engine.js';
 import { GoalProbe } from './lean/infoview.js';
 import { checkLesson } from './lean/tutorial.js';
+import { compileBlocks } from './lean/blocks.js';
 import { locate, parseOutput } from './lean/diagnostics.js';
 import {
   LESSONS, SANDBOX, THEMES, THEMES_AVAILABLE, THEMES_PLANNED, TOPICS, lessonById,
@@ -14,6 +15,7 @@ import {
   topicById, topicOfLesson, topicProgress, totalProgress,
 } from './content/index.js';
 import { createEditor } from './ui/editor.js';
+import { createBlocksEditor } from './ui/blocks-editor.js';
 import { createInfoviewPanel } from './ui/infoview-panel.js';
 import { clear, h } from './ui/dom.js';
 import { inlineProse, prose } from './ui/prose.js';
@@ -32,7 +34,7 @@ const statusPanel = h('div', { class: 'card', id: 'engine-panel' });
 statusPanel.style.display = 'none';
 
 /** @type {{solved: Record<string, boolean>, drafts: Record<string, string>, sandbox: string,
- *          infoviewCollapsed: boolean, focusMode: boolean}} */
+ *          blockDrafts: Record<string, object[]>, infoviewCollapsed: boolean, focusMode: boolean}} */
 const store = loadStore();
 
 function loadStore() {
@@ -42,13 +44,14 @@ function loadStore() {
       solved: parsed.solved && typeof parsed.solved === 'object' ? parsed.solved : {},
       drafts: parsed.drafts && typeof parsed.drafts === 'object' ? parsed.drafts : {},
       sandbox: typeof parsed.sandbox === 'string' ? parsed.sandbox : '',
+      blockDrafts: parsed.blockDrafts && typeof parsed.blockDrafts === 'object' ? parsed.blockDrafts : {},
       infoviewCollapsed: Boolean(parsed.infoviewCollapsed),
       // A preference, not progress: a store written before focus mode existed
       // simply has no field, which reads as "off".
       focusMode: Boolean(parsed.focusMode),
     };
   } catch {
-    return { solved: {}, drafts: {}, sandbox: '', infoviewCollapsed: false, focusMode: false };
+    return { solved: {}, drafts: {}, sandbox: '', blockDrafts: {}, infoviewCollapsed: false, focusMode: false };
   }
 }
 
@@ -130,14 +133,19 @@ chip.addEventListener('click', () => {
 // ------------------------------------------------------------------ router
 
 // The current lesson view owns the focus-mode listeners and the body attribute;
-// a route change has to tear them down, or the mode would outlive its page.
+// a route change has to tear them down, or the mode would outlive its page. The
+// block editor owns a Blockly workspace and a ResizeObserver, so it gets the
+// same treatment.
 let disposeFocus = null;
+let disposeAnswer = null;
 
 function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [section, param] = hash.split('/');
   disposeFocus?.();
   disposeFocus = null;
+  disposeAnswer?.();
+  disposeAnswer = null;
   clear(main);
   goalProbe.cancel();
   statusPanel.style.display = 'none';
@@ -404,8 +412,10 @@ function renderLesson(lesson) {
   const previous = previousLesson(lesson.id);
   const next = nextLesson(lesson.id);
   const isFile = (lesson.kind ?? 'tactic') === 'file';
+  const isBlocks = Boolean(lesson.blocks);
 
   let input = store.drafts[lesson.id] ?? '';
+  let blocksEditor = null;
   let checking = false;
   // Set when the *current* editor contents were the ones Lean accepted.
   let verified = false;
@@ -423,14 +433,26 @@ function renderLesson(lesson) {
   const feedback = h('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
   const infoview = createInfoviewPanel({
     collapsed: store.infoviewCollapsed,
-    label: isFile ? 'Output' : 'Goals and assumptions at the cursor',
+    label: isBlocks ? 'Goals left by these blocks'
+      : isFile ? 'Output' : 'Goals and assumptions at the cursor',
+    // A block workspace has no caret: the panel shows the goals the whole stack
+    // leaves open, so neither the idle text nor the title may mention a cursor.
+    idleText: isBlocks ? 'The goals left open by your blocks will appear here.' : undefined,
+    showLine: !isBlocks,
     onToggle: (collapsed) => { store.infoviewCollapsed = collapsed; saveStore(); },
   });
 
   // Probes are debounced and token-checked: a stale answer must not paint over a
-  // newer one, and typing must not queue a compile per keystroke.
+  // newer one, and typing must not queue a compile per keystroke. A block
+  // workspace has no caret, so its probe asks for the state after the whole
+  // stack — which is exactly "what is left to prove".
   let probeToken = 0;
   let probeTimer = null;
+  const probeTarget = () => {
+    if (!isBlocks) return { code: input, line: editor.cursor().line };
+    const code = blocksEditor?.getLean() ?? '';
+    return { code, line: code === '' ? -1 : code.split('\n').length - 1 };
+  };
   const scheduleProbe = ({ immediate = false } = {}) => {
     window.clearTimeout(probeTimer);
     const token = ++probeToken;
@@ -438,7 +460,8 @@ function renderLesson(lesson) {
       if (token !== probeToken) return;
       if (engine.state !== 'ready') return; // the engine subscription re-probes on ready
       infoview.update(null, { busy: true });
-      const result = await goalProbe.goalsAt(lesson, input, editor.cursor().line);
+      const target = probeTarget();
+      const result = await goalProbe.goalsAt(lesson, target.code, target.line);
       if (token !== probeToken) return;
       infoview.update(result, { busy: false });
     };
@@ -446,23 +469,47 @@ function renderLesson(lesson) {
     else probeTimer = window.setTimeout(run, 320);
   };
 
-  const editor = createEditor({
-    value: input,
-    placeholder: lesson.placeholder,
-    rows: isFile ? 10 : 6,
-    label: isFile ? 'Your Lean file' : 'Your tactic block',
-    onCursor: () => scheduleProbe(),
-    onInput: (value) => {
-      input = value;
-      if (value) store.drafts[lesson.id] = value;
-      else delete store.drafts[lesson.id];
-      saveStore();
-      // Editing after a success means the verified answer is no longer on screen;
-      // the solved lesson and its way onward stay marked.
-      if (verified) { verified = false; clear(feedback); syncButtons(); }
-      scheduleProbe();
-    },
-  });
+  let editor;
+  if (isBlocks) {
+    const saved = store.blockDrafts[lesson.id];
+    blocksEditor = createBlocksEditor({
+      lesson,
+      program: Array.isArray(saved) ? saved : (lesson.blocks.starter ?? []),
+      onChange: (next) => {
+        if (next.length > 0) store.blockDrafts[lesson.id] = next;
+        else delete store.blockDrafts[lesson.id];
+        saveStore();
+        // Editing after a success means the verified answer is no longer on
+        // screen; the solved lesson and its way onward stay marked.
+        if (verified) { verified = false; clear(feedback); }
+        syncButtons();
+        scheduleProbe();
+      },
+      onReady: () => {
+        syncButtons();
+        scheduleProbe({ immediate: true });
+      },
+    });
+    editor = blocksEditor;
+  } else {
+    editor = createEditor({
+      value: input,
+      placeholder: lesson.placeholder,
+      rows: isFile ? 10 : 6,
+      label: isFile ? 'Your Lean file' : 'Your tactic block',
+      onCursor: () => scheduleProbe(),
+      onInput: (value) => {
+        input = value;
+        if (value) store.drafts[lesson.id] = value;
+        else delete store.drafts[lesson.id];
+        saveStore();
+        // Editing after a success means the verified answer is no longer on screen;
+        // the solved lesson and its way onward stay marked.
+        if (verified) { verified = false; clear(feedback); syncButtons(); }
+        scheduleProbe();
+      },
+    });
+  }
 
   // The way into focus mode sits in the editor's own header, where the writing
   // happens. (The editor stays a plain textarea; this is app furniture.)
@@ -474,7 +521,7 @@ function renderLesson(lesson) {
     onclick: () => focusMode.enter(),
   });
   editor.element.prepend(h('div', { class: 'editor-head' },
-    h('span', { class: 'editor-label', text: isFile ? 'Your Lean file' : 'Your tactic block' }),
+    h('span', { class: 'editor-label', text: isBlocks ? 'Blocks' : isFile ? 'Your Lean file' : 'Your tactic block' }),
     focusToggle));
 
   // Visible only in the mode (app.css). The mode is a labelled region so a
@@ -494,10 +541,16 @@ function renderLesson(lesson) {
   const clearButton = h('button', {
     class: 'btn ghost', type: 'button', text: 'Clear',
     onclick: () => {
-      editor.setValue('');
-      input = '';
-      delete store.drafts[lesson.id];
-      saveStore();
+      if (isBlocks) {
+        delete store.blockDrafts[lesson.id];
+        saveStore();
+        blocksEditor.clear();
+      } else {
+        editor.setValue('');
+        input = '';
+        delete store.drafts[lesson.id];
+        saveStore();
+      }
       verified = false;
       clear(feedback);
       syncButtons();
@@ -521,7 +574,10 @@ function renderLesson(lesson) {
       ? h('p', { class: 'small muted statement-note' }, inlineProse(
         'This one is a whole file: commands like `#check`, `#eval` and `def` are allowed, and the output appears below.'))
       : h('pre', { class: 'statement' }, h('span', { class: 'lbl', text: '⊢ ' }), lesson.statement),
-    h('div', { class: 'workbench' },
+    // A block proof needs width, not a second column: its goals sit above the
+    // workspace at full width (and lay themselves out side by side when there
+    // is room), so the blocks get the whole card.
+    h('div', { class: isBlocks ? 'workbench workbench-blocks' : 'workbench' },
       infoview.element,
       h('div', { class: 'workbench-main' }, editor.element, actions)));
   main.append(focusBar, card);
@@ -530,17 +586,26 @@ function renderLesson(lesson) {
     h('summary', { text: 'Hint' }),
     h('div', { class: 'body' }, prose(lesson.hint))));
 
+  // A block lesson shows the Lean its solution blocks produce, not a separate
+  // hand-written answer: the blocks and the checked text cannot drift apart.
+  const solutionLean = isBlocks ? compileBlocks(lesson.blocks.solution).code : lesson.solution;
   main.append(h('details', { class: 'solution', style: 'margin-top:10px' },
     h('summary', { text: 'One solution' }),
     h('div', { class: 'body' },
-      h('pre', { class: 'statement', text: lesson.solution }),
+      h('pre', { class: 'statement', text: solutionLean }),
       h('button', {
-        class: 'btn', type: 'button', text: 'Put it in the editor',
+        class: 'btn', type: 'button', text: isBlocks ? 'Build it from blocks' : 'Put it in the editor',
         onclick: () => {
-          editor.setValue(lesson.solution);
-          input = lesson.solution;
-          store.drafts[lesson.id] = input;
-          saveStore();
+          if (isBlocks) {
+            store.blockDrafts[lesson.id] = lesson.blocks.solution;
+            saveStore();
+            blocksEditor.setProgram(lesson.blocks.solution);
+          } else {
+            editor.setValue(lesson.solution);
+            input = lesson.solution;
+            store.drafts[lesson.id] = input;
+            saveStore();
+          }
           editor.focus();
         },
       }))));
@@ -558,11 +623,15 @@ function renderLesson(lesson) {
     nextLink));
 
   function syncButtons() {
-    checkButton.disabled = checking || engine.state !== 'ready';
+    const blocksBusy = isBlocks && !blocksEditor?.isReady();
+    const blocksEmpty = isBlocks && !blocksEditor?.hasCode();
+    checkButton.disabled = checking || engine.state !== 'ready' || blocksBusy || blocksEmpty;
     checkButton.textContent = checking
       ? (isFile ? 'Running…' : 'Checking…')
       : verified ? '✓ Verified'
-        : engine.state === 'ready' ? (isFile ? 'Run file' : 'Check proof') : 'Preparing Lean…';
+        : engine.state !== 'ready' ? 'Preparing Lean…'
+          : blocksBusy ? 'Preparing blocks…'
+            : blocksEmpty ? 'Build a proof first' : (isFile ? 'Run file' : 'Check proof');
     checkButton.classList.toggle('done', verified);
     nextButton.hidden = !verified && !isSolved(lesson.id);
     nextLink.classList.toggle('accent', isSolved(lesson.id) || verified);
@@ -573,12 +642,19 @@ function renderLesson(lesson) {
     syncButtons();
   }
 
-  syncUi = () => setChecking(checking);
+  syncUi = () => {
+    setChecking(checking);
+    // The first probe may have been asked for while Lean was still compiling the
+    // wasm; now that it is ready, ask again so the goals appear without a click.
+    if (engine.state === 'ready') scheduleProbe({ immediate: true });
+  };
   setChecking(false);
+  if (engine.state === 'ready') scheduleProbe({ immediate: true });
   editor.focus();
   // A remembered choice is applied whenever a lesson renders, so moving to the
   // next lesson keeps the full-screen view.
   disposeFocus = () => focusMode.dispose();
+  disposeAnswer = isBlocks ? () => blocksEditor.dispose() : null;
   if (store.focusMode) focusMode.enter();
 
   async function runCheck() {
@@ -588,12 +664,23 @@ function renderLesson(lesson) {
       feedback.append(h('p', { class: 'banner info', text: engine.progress.message || 'Lean is still starting.' }));
       return;
     }
+    if (isBlocks && (!blocksEditor.isReady() || !blocksEditor.hasCode())) {
+      clear(feedback);
+      feedback.append(h('p', { class: 'banner info', text: blocksEditor.isReady()
+        ? 'Drag at least one tactic block into the workspace first.'
+        : 'The block editor is still loading.' }));
+      return;
+    }
     setChecking(true);
     clear(feedback);
     feedback.append(h('p', { class: 'banner info', text: isFile ? 'Lean is running your file…' : 'Lean is checking your proof…' }));
+    // The generated Lean *is* the answer: it goes through the same two-pass
+    // kernel check as text typed into the editor. Nothing is trusted because it
+    // came from a block.
+    const answer = isBlocks ? blocksEditor.getLean() : input;
     let result;
     try {
-      result = await checkLesson(engine, lesson, input);
+      result = await checkLesson(engine, lesson, answer);
     } catch (error) {
       result = {
         ok: false, kind: 'runtime', headline: 'Something went wrong',
@@ -606,6 +693,7 @@ function renderLesson(lesson) {
       store.solved[lesson.id] = true;
       saveStore();
     }
+    if (isBlocks) blocksEditor.markProblems(result.messages);
     renderFeedback(feedback, result, lesson);
     syncButtons();
   }
@@ -752,6 +840,6 @@ route();
 // Debug/automation hook: reachable from the console (and from tests), which is
 // what to use when a proof behaves unexpectedly.
 window.leanTutorials = {
-  engine, checkLesson, store,
+  engine, checkLesson, store, compileBlocks,
   content: { TOPICS, LESSONS, SANDBOX, lessonById, topicById, nextLesson, previousLesson, topicProgress },
 };

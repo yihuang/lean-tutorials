@@ -31,6 +31,8 @@ site/
   src/lean/diagnostics.js    JSON diagnostics → learner line numbers
   src/lean/goals.js          turn `trace_state` output into goal panels
   src/lean/infoview.js       cursor probe: the goals at the caret
+  src/lean/blocks.js         block program → ordinary Lean tactics
+  src/ui/blocks-editor.js    the lazy-loaded Blockly workspace
   src/ui/infoview-panel.js   renders a probe result (cases, hypotheses, ⊢ goal)
   src/lean/unicode.js        Lean unicode abbreviations + symbol bar
   src/content/               the course: topics + lessons (data only)
@@ -312,6 +314,10 @@ as `site/UPSTREAM-LICENSE-Apache-2.0.txt` and the credit is in the site footer.
 The binaries are not committed — `npm run prepare:runtime` fetches the pinned
 release and verifies its hashes.
 
+The block editor is [Blockly](https://developers.google.com/blockly) (Apache-2.0),
+installed from npm and vendored into `dist/vendor/blockly/` at build time; its
+licence ships with it.
+
 ## The infoview: goals at the cursor
 
 A language server answers "what is true at this position?" by elaborating a
@@ -394,13 +400,59 @@ the statement's goal before any input, both subgoals with their context after
 `constructor`, and flips to "complete" when the proof is finished — all without
 pressing Check.
 
+## The natural number game: blocks that compile to Lean
+
+The first theme is a small Blockly proof game. Each level declares a palette of
+tactics (`rfl`, `rw`, `induction`, `cases`, …), the lemmas or names that palette
+may mention, an optional starter stack, and a solution stack. The learner drags
+blocks from the palette into the workspace (a fresh level opens the palette and
+shows the real Blockly blocks); the page converts that tree to a tactic block and
+shows it under the editor.
+
+On startup, a level that already has a saved or shipped proof keeps the palette
+closed and calls Blockly's `workspace.zoomToFit()`, so a reload never begins with
+a clipped tree; the palette is one tap away in its category bar. A fresh level
+opens the palette instead.
+
+**The blocks are not a separate proof language.** `src/lean/blocks.js` compiles
+the tree to exactly the text a learner could have typed, and that text goes
+through the same `buildSource` + two-pass kernel check as every other lesson:
+
+```
+induction n with          ←  [induction n] with a zero branch and a succ branch
+| zero =>                     [rfl] in the zero branch
+  rfl                         [rw Nat.add_succ] then [rw ih] in the succ branch
+| succ k ih =>
+  rw [Nat.add_succ]
+  rw [ih]
+```
+
+An empty branch compiles to `skip`, so a half-built proof still parses and the
+goal panel can show what is left to prove. Existentials are built with the
+generic `refine` block: drag `⟨ , ⟩` into it, put the witness in the first half
+and the `?_` hole in the second. `refine ⟨k, ?_⟩` leaves the property as the next
+goal, so the panel moves from `∃ k, …` to the equation one block at a time. There
+is no `use` block — the pinned Init has no `use` tactic, and refine+hole is the
+general spelling. A block program is plain data (the
+same shape is written by content, saved in `localStorage`, and produced by the
+editor), and `tests/blocks.test.mjs` checks that every shipped level's blocks
+compile to exactly its declared Lean solution.
+
+Blockly itself is a build-time dependency (`blockly`, Apache-2.0). `scripts/build.mjs`
+vendors the UMD core and its message/media files into `dist/vendor/blockly/`;
+`scripts/serve.mjs` resolves the same `/vendor/blockly/*` URLs from
+`node_modules` when you run `npm run dev`, so there is no extra prepare step.
+The editor is loaded lazily, only on a lesson with `blocks`: it adds ~640 KB of
+JavaScript (cached after the first block level) and nothing to a text lesson.
+
 ## Course structure: content vs mechanism
 
-The course is **themes → topics → lessons**. Today that is one theme with material
-(**Proof basics**: 31 lessons in 7 topics) plus **five announced themes** —
-program verification, functional programming, data structures and algorithms,
-doing maths in Lean, and tactics/metaprogramming — each with its planned topics
-listed as data. The roadmap is content, so it lives in the same contract.
+The course is **themes → topics → lessons**. Today that is three themes with
+material — **The natural number game** (7 block levels), **Proof basics** (31
+lessons in 8 topics) and **Program verification** (24 lessons in 4 topics) — plus
+**four announced themes**: functional programming, data structures and algorithms,
+doing maths in Lean, and tactics/metaprogramming. The roadmap is content, so it
+lives in the same contract.
 
 ```
 theme (broad area; owns topics)  →  topic (owns lessons)  →  lesson
