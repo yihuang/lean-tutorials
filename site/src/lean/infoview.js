@@ -212,13 +212,17 @@ export class GoalProbe {
       // The shared extractor first (it is what the checker uses); the armed walk
       // is the same handshake with the merged-trace shape handled. A branch held
       // open by `skip` can make Lean report its goal state as an "unsolved goals"
-      // diagnostic instead of running the later trace wrapper; the checker reads
-      // that shape too, so the panel is never blank while a goal is visibly open.
-      let goals = goalsFromDiagnostics(diagnostics, GOAL_TRACE_MARKER).map(formatGoal);
-      if (goals.length === 0) {
-        goals = [...new Set(diagnostics.filter(isUnsolvedGoals).flatMap((diagnostic) => goalsFromText(diagnostic.message)))]
-          .map(formatGoal);
-      }
+      // diagnostic instead of running the later trace wrapper. Both sources can
+      // contribute different goals in the same preview (a focused branch reports
+      // an unsolved diagnostic while another goal arrives through the trace), so
+      // merge and deduplicate them rather than treating the diagnostics as a
+      // fallback only when the trace is empty.
+      const traced = goalsFromDiagnostics(diagnostics, GOAL_TRACE_MARKER).map(formatGoal);
+      const unsolved = diagnostics
+        .filter(isUnsolvedGoals)
+        .flatMap((diagnostic) => goalsFromText(diagnostic.message))
+        .map(formatGoal);
+      const goals = [...new Set([...traced, ...unsolved])];
       const result = makeResult({
         status: goals.length > 0 ? 'goals' : 'complete',
         requestedLine,

@@ -476,8 +476,10 @@ function renderLesson(lesson) {
       lesson,
       program: Array.isArray(saved) ? saved : (lesson.blocks.starter ?? []),
       onChange: (next) => {
-        if (next.length > 0) store.blockDrafts[lesson.id] = next;
-        else delete store.blockDrafts[lesson.id];
+        // An empty array is a real answer ("the learner cleared this level"),
+        // not "never opened": keep it so the starter does not come back on the
+        // next visit. Only the absence of the key means "use the starter".
+        store.blockDrafts[lesson.id] = next;
         saveStore();
         // Editing after a success means the verified answer is no longer on
         // screen; the solved lesson and its way onward stay marked.
