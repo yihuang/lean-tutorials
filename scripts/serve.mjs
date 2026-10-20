@@ -8,7 +8,7 @@
 // with a 404 status, and the app shell for extensionless paths.
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -16,6 +16,9 @@ const argValue = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 const root = resolve(argValue('dir', 'site'));
+// The Blockly fallback below is a development convenience; `dist` must contain
+// the vendored assets or the layout test would validate the wrong tree.
+const isDevTree = basename(root) === 'site';
 const port = Number(argValue('port', process.env.PORT || 8788));
 const logBytes = args.includes('--log-bytes');
 const VENDOR_BLOCKLY = '/vendor/blockly/';
@@ -62,7 +65,7 @@ const server = createServer((req, res) => {
   // Blockly is a build-time dependency, not a committed one. `dist` has the
   // vendored copy; when serving `site` directly, resolve the same URLs from
   // node_modules so `npm run dev` needs no extra prepare step.
-  if (!existsSync(filePath) && pathname.startsWith(VENDOR_BLOCKLY)) {
+  if (isDevTree && !existsSync(filePath) && pathname.startsWith(VENDOR_BLOCKLY)) {
     const vendorRoot = resolve(join(root, '..', 'node_modules', 'blockly'));
     const candidate = resolve(join(vendorRoot, pathname.slice(VENDOR_BLOCKLY.length)));
     if ((candidate === vendorRoot || candidate.startsWith(vendorRoot + sep)) && existsSync(candidate)) {

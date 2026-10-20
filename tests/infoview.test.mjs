@@ -318,3 +318,27 @@ test('an empty block branch is reported as a goal, not as a rejected prefix', as
   assert.equal(result.goals.length, 1);
   assert.match(result.goals[0], /0 \+ 0 = 0/);
 });
+
+test('traced and unsolved goals from different branches are merged', async () => {
+  // A focused branch can report an unsolved-goals diagnostic while the trace
+  // carries another goal from a sibling branch. Both are open; showing only one
+  // would under-report the proof state.
+  const engine = scriptedEngine(() => ({
+    success: true,
+    output: [
+      diagnostic({ severity: 'information', kind: 'trace', data: `${GOAL_TRACE_MARKER}\n${GOAL_P}` }),
+      diagnostic({
+        severity: 'error',
+        kind: 'unsolvedGoals',
+        data: 'unsolved goals\ncase right\nq : Prop\n⊢ q',
+        pos: { line: 2, column: 1 },
+      }),
+    ],
+  }));
+  const probe = new GoalProbe(engine);
+  const result = await probe.goalsAt(LESSON, 'constructor\n· skip', 1);
+  assert.equal(result.status, 'goals');
+  assert.equal(result.goals.length, 2);
+  assert.ok(result.goals.some((goal) => /⊢\s+p/.test(goal)));
+  assert.ok(result.goals.some((goal) => /⊢\s+q/.test(goal)));
+});
